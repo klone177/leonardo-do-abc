@@ -70,6 +70,7 @@ export interface GameCode {
   type: 'MONEY' | 'MULTIPLIER';
   value: number;
   createdBy: string;
+  createdAt: number; // Timestamp for expiration
 }
 
 export interface LeaderboardEntry {

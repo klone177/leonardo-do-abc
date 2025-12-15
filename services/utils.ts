@@ -12,6 +12,26 @@ export const formatMoney = (amount: number): string => {
   return shortValue + suffixes[suffixNum];
 };
 
+// --- SECURITY SYSTEM ---
+const SECRET_SALT = "LEONARDO_ABC_SECURE_KEY_V1_2025_#$@!";
+
+// Simple DJB2-like hash for client-side integrity check
+export const generateSaveHash = (data: any): string => {
+  const str = JSON.stringify(data) + SECRET_SALT;
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = (hash * 33) ^ str.charCodeAt(i);
+  }
+  // Convert to Base64 to make it look like a signature and harder to read
+  return btoa(hash.toString() + "SIG");
+};
+
+export const verifySaveHash = (data: any, originalHash: string): boolean => {
+  const calculated = generateSaveHash(data);
+  return calculated === originalHash;
+};
+// -----------------------
+
 // Simple audio synth
 const audioCtx = typeof window !== 'undefined' && window.AudioContext ? new window.AudioContext() : null;
 

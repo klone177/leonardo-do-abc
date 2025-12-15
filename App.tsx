@@ -22,11 +22,13 @@ import {
   Globe,
   Medal,
   CheckCircle,
-  XCircle
+  XCircle,
+  Clock,
+  AlertTriangle
 } from 'lucide-react';
 import { INITIAL_PRODUCTS, AVAILABLE_STAFF, UPGRADES, FUNNY_QUOTES } from './constants';
 import { GameState, Tab, TITLES, Product, GameCode, LeaderboardEntry } from './types';
-import { formatMoney, playSound } from './services/utils';
+import { formatMoney, playSound, generateSaveHash, verifySaveHash } from './services/utils';
 import { FloatingText } from './components/FloatingText';
 import { RadioSystem } from './components/RadioSystem';
 
@@ -47,6 +49,10 @@ const INITIAL_STATE: GameState = {
 
 type BuyAmount = 1 | 10 | 25 | 50 | 100 | 'MAX';
 type AuthMode = 'login' | 'register';
+
+const PRESTIGE_BONUS_PER_LEVEL = 0.25; // 25% per level
+const CODE_EXPIRATION_MS = 60 * 1000; // 1 Minute
+const RANKING_UPDATE_MS = 5 * 60 * 1000; // 5 Minutes
 
 // Fake data for leaderboard initialization
 const INITIAL_BOTS: LeaderboardEntry[] = [
@@ -74,6 +80,7 @@ export default function App() {
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [showPrestigeModal, setShowPrestigeModal] = useState(false);
+  const [cheaterDetected, setCheaterDetected] = useState(false);
 
   // Code System State
   const [codeInput, setCodeInput] = useState('');
@@ -95,7 +102,7 @@ export default function App() {
 
   // --- Initialization & Global Data ---
 
-  // Load Codes
+  // Load Codes and Initial Leaderboard
   useEffect(() => {
     const storedCodes = localStorage.getItem('leonardo_server_codes');
     if (storedCodes) {
@@ -117,6 +124,33 @@ export default function App() {
       }
     }
   }, []);
+
+  // Update Ranking every 5 Minutes
+  useEffect(() => {
+    if (!username || cheaterDetected) return;
+
+    const updateRank = () => {
+        if (usernameRef.current && !cheaterDetected) {
+            updateGlobalLeaderboard(usernameRef.current, stateRef.current);
+            // Also refresh local view
+            const storedLeaderboard = localStorage.getItem('leonardo_global_users');
+            if (storedLeaderboard) setLeaderboard(JSON.parse(storedLeaderboard));
+        }
+    };
+
+    // Initial update on login is handled in loadUser, here we set the interval
+    const interval = setInterval(updateRank, RANKING_UPDATE_MS);
+    return () => clearInterval(interval);
+  }, [username, cheaterDetected]);
+
+  // Clean up expired codes from Admin view periodically
+  useEffect(() => {
+    if (!isAdmin) return;
+    const interval = setInterval(() => {
+        setServerCodes(prev => [...prev]); // Force re-render to update timers
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [isAdmin]);
 
   const saveServerCodes = (codes: GameCode[]) => {
     setServerCodes(codes);
@@ -146,7 +180,6 @@ export default function App() {
     });
 
     localStorage.setItem('leonardo_global_users', JSON.stringify(list));
-    setLeaderboard(list);
   };
 
   const checkUserExists = (user: string): boolean => {
@@ -291,11 +324,30 @@ export default function App() {
     
     if (saved) {
       try {
-        const parsed: GameState = JSON.parse(saved);
-        // Merge to ensure new fields exist
-        const merged = { ...INITIAL_STATE, ...parsed };
-        setGameState(merged);
-        checkOfflineEarnings(merged);
+        const parsedWrapper = JSON.parse(saved);
+        
+        // --- SECURITY CHECK ---
+        let finalState = INITIAL_STATE;
+
+        // Check if it's the new secure format { data: ..., hash: ... }
+        if (parsedWrapper.data && parsedWrapper.hash) {
+            const isValid = verifySaveHash(parsedWrapper.data, parsedWrapper.hash);
+            if (!isValid) {
+                alert("ERRO DE SEGURANÇA:\n\nDetectamos alterações manuais no seu arquivo de save.\nPara garantir a justiça do Ranking Global, seu progresso foi resetado.");
+                // We do NOT load the corrupted state. We keep INITIAL_STATE.
+                setCheaterDetected(true);
+            } else {
+                finalState = { ...INITIAL_STATE, ...parsedWrapper.data };
+            }
+        } 
+        // Backward compatibility for old saves (migrate them once)
+        else if (parsedWrapper.money !== undefined) {
+             finalState = { ...INITIAL_STATE, ...parsedWrapper };
+        }
+
+        setGameState(finalState);
+        if (!cheaterDetected) checkOfflineEarnings(finalState);
+
       } catch (err) {
         setGameState(INITIAL_STATE);
       }
@@ -303,6 +355,10 @@ export default function App() {
       setGameState({ ...INITIAL_STATE, startTime: Date.now() });
       updateGlobalLeaderboard(user, INITIAL_STATE);
     }
+    
+    // Update local ranking view immediately on load
+    const storedLeaderboard = localStorage.getItem('leonardo_global_users');
+    if (storedLeaderboard) setLeaderboard(JSON.parse(storedLeaderboard));
   };
 
   const checkOfflineEarnings = (parsed: GameState) => {
@@ -346,16 +402,24 @@ export default function App() {
     setPasswordInput('');
     setLoginError(null);
     setGameState(INITIAL_STATE);
+    setCheaterDetected(false);
   };
 
   const saveGame = () => {
-    if (!usernameRef.current) return;
+    if (!usernameRef.current || cheaterDetected) return; // Don't save if cheater detected
+
     const toSave = { ...stateRef.current, lastSaveTime: Date.now() };
-    localStorage.setItem(`leonardo_save_${usernameRef.current}`, JSON.stringify(toSave));
-    localStorage.setItem('leonardo_last_user', usernameRef.current);
     
-    // Update Leaderboard
-    updateGlobalLeaderboard(usernameRef.current, stateRef.current);
+    // --- SECURITY SIGNING ---
+    const hash = generateSaveHash(toSave);
+    const securePackage = {
+        data: toSave,
+        hash: hash
+    };
+    // ------------------------
+
+    localStorage.setItem(`leonardo_save_${usernameRef.current}`, JSON.stringify(securePackage));
+    localStorage.setItem('leonardo_last_user', usernameRef.current);
   };
 
   useEffect(() => {
@@ -366,9 +430,16 @@ export default function App() {
   // --- Game Loop ---
 
   useEffect(() => {
-    if (!username) return;
+    if (!username || cheaterDetected) return;
 
     const interval = setInterval(() => {
+      // --- SANITY CHECK (Anti-Cheat Runtime) ---
+      if (gameState.money === Infinity || isNaN(gameState.money) || gameState.money < 0) {
+          setCheaterDetected(true);
+          setGameState(INITIAL_STATE); // Soft reset in memory
+          return;
+      }
+
       const eps = calculateTotalEPS();
       setGameState(prev => ({
         ...prev,
@@ -386,11 +457,12 @@ export default function App() {
       clearInterval(interval);
       clearInterval(saveInterval);
     };
-  }, [calculateTotalEPS, username]);
+  }, [calculateTotalEPS, username, cheaterDetected, gameState.money]);
 
   // --- Actions ---
 
   const handleWorkClick = (e: React.MouseEvent) => {
+    if (cheaterDetected) return;
     const power = calculateClickPower();
     playSound('click', gameState.soundEnabled);
     setGameState(prev => ({
@@ -402,6 +474,7 @@ export default function App() {
   };
 
   const buyProduct = (product: Product) => {
+    if (cheaterDetected) return;
     const currentLevel = gameState.productLevels[product.id] || 0;
     const { count, cost } = calculateBulkCost(product, currentLevel, buyAmount, gameState.money);
     if (count > 0 && gameState.money >= cost) {
@@ -415,6 +488,7 @@ export default function App() {
   };
 
   const unlockProduct = (product: Product) => {
+    if (cheaterDetected) return;
     if (gameState.money >= product.unlockCost) {
       playSound('upgrade', gameState.soundEnabled);
       setGameState(prev => ({
@@ -426,6 +500,7 @@ export default function App() {
   }
 
   const hireStaff = (staff: typeof AVAILABLE_STAFF[0]) => {
+    if (cheaterDetected) return;
     if (gameState.money >= staff.baseCost && !gameState.hiredStaff[staff.id]) {
       playSound('upgrade', gameState.soundEnabled);
       setGameState(prev => ({
@@ -437,6 +512,7 @@ export default function App() {
   };
 
   const buyUpgrade = (upgrade: typeof UPGRADES[0]) => {
+    if (cheaterDetected) return;
     if (gameState.money >= upgrade.cost && !gameState.purchasedUpgrades[upgrade.id]) {
       playSound('upgrade', gameState.soundEnabled);
       setGameState(prev => ({
@@ -448,15 +524,17 @@ export default function App() {
   };
 
   const handlePrestigeClick = () => {
+      if (cheaterDetected) return;
       setShowPrestigeModal(true);
   };
 
   const confirmPrestige = () => {
     const prestigeCurrency = gameState.lifetimeEarnings / 1000000;
     if (prestigeCurrency < 1) return;
-    const bonus = prestigeCurrency * 0.10; // 10% per million
-    const newMultiplier = (gameState.prestigeMultiplier || 1) + bonus;
+    
+    // New Calculation: 25% (0.25) per Prestige Level
     const nextLevel = gameState.prestigeLevel + 1;
+    const newMultiplier = 1 + (nextLevel * PRESTIGE_BONUS_PER_LEVEL);
 
     // Manually construct new state to ensure deep reset
     const newState: GameState = {
@@ -476,7 +554,9 @@ export default function App() {
     setGameState(newState);
     playSound('upgrade', gameState.soundEnabled);
     if (usernameRef.current) {
-        localStorage.setItem(`leonardo_save_${usernameRef.current}`, JSON.stringify(newState));
+        // Use manual save to ensure signature is applied immediately
+        const hash = generateSaveHash(newState);
+        localStorage.setItem(`leonardo_save_${usernameRef.current}`, JSON.stringify({ data: newState, hash }));
         updateGlobalLeaderboard(usernameRef.current, newState);
     }
     setShowPrestigeModal(false);
@@ -487,6 +567,7 @@ export default function App() {
   // --- Code System ---
 
   const handleRedeemCode = () => {
+    if (cheaterDetected) return;
     const code = codeInput.trim().toUpperCase();
     if (!code) return;
 
@@ -499,6 +580,15 @@ export default function App() {
     const foundCode = serverCodes.find(c => c.code === code);
     
     if (foundCode) {
+        // Check Expiration (1 minute)
+        const now = Date.now();
+        const expiresAt = foundCode.createdAt + CODE_EXPIRATION_MS;
+        
+        if (now > expiresAt) {
+            setCodeMessage({ type: 'error', text: 'Código expirado!' });
+            return;
+        }
+
         let successText = "";
         setGameState(prev => {
             let newMoney = prev.money;
@@ -523,7 +613,7 @@ export default function App() {
         playSound('upgrade', gameState.soundEnabled);
         setCodeInput('');
     } else {
-        setCodeMessage({ type: 'error', text: 'Código inválido ou expirado.' });
+        setCodeMessage({ type: 'error', text: 'Código inválido.' });
     }
   };
 
@@ -542,12 +632,13 @@ export default function App() {
         code: finalCode,
         type: newCodeType,
         value: Number(newCodeValue),
-        createdBy: username || 'Admin'
+        createdBy: username || 'Admin',
+        createdAt: Date.now()
     };
 
     const updated = [...serverCodes, newCode];
     saveServerCodes(updated);
-    alert(`Código ${finalCode} criado com sucesso!`);
+    alert(`Código ${finalCode} criado! Válido por 1 minuto.`);
     setNewCodeName('');
   };
 
@@ -636,10 +727,21 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900 pb-20 md:pb-0 font-sans overflow-hidden flex flex-col">
+      {cheaterDetected && (
+          <div className="fixed inset-0 z-[100] bg-red-900/95 flex items-center justify-center p-8 backdrop-blur text-white text-center">
+              <div>
+                  <AlertTriangle size={80} className="mx-auto mb-4 text-yellow-400 animate-pulse" />
+                  <h1 className="text-4xl font-bold font-display mb-4">Ação Suspeita Detectada</h1>
+                  <p className="text-xl mb-8">Valores impossíveis ou modificação de save detectada.</p>
+                  <button onClick={handleLogout} className="bg-white text-red-900 px-6 py-3 rounded font-bold hover:bg-slate-200">Reiniciar Jogo</button>
+              </div>
+          </div>
+      )}
+
       {clicks.map(click => <FloatingText key={click.id} x={click.x} y={click.y} value={click.value} onComplete={() => setClicks(p => p.filter(c => c.id !== click.id))} />)}
 
       {/* Offline Modal */}
-      {offlineEarnings && (
+      {offlineEarnings && !cheaterDetected && (
         <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
           <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full animate-bounce-in text-center">
             <h2 className="text-2xl font-display font-bold text-blue-600 mb-2">Bem-vindo de volta!</h2>
@@ -676,8 +778,9 @@ export default function App() {
                         <div className="text-center p-3 bg-green-50 rounded-lg border border-green-200">
                             <p className="text-xs text-green-600 font-bold uppercase">Novo Bônus</p>
                             <p className="text-xl font-bold text-green-600">
-                                x{((gameState.prestigeMultiplier || 1) + (gameState.lifetimeEarnings / 1000000 * 0.10)).toFixed(2)}
+                                x{(1 + (gameState.prestigeLevel + 1) * PRESTIGE_BONUS_PER_LEVEL).toFixed(2)}
                             </p>
+                            <p className="text-[10px] text-green-600">(+{PRESTIGE_BONUS_PER_LEVEL * 100}%/Cargo)</p>
                         </div>
                     </div>
 
@@ -1066,7 +1169,7 @@ export default function App() {
 
                         {/* Code Generator */}
                         <div className="bg-slate-800 p-4 rounded-lg">
-                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase flex items-center gap-2"><Ticket size={14} /> Gerador de Códigos Globais</h3>
+                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase flex items-center gap-2"><Ticket size={14} /> Gerador de Códigos Globais (1 Min Validade)</h3>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
                                 <div>
                                     <label className="text-xs text-slate-500 block mb-1">Nome do Código</label>
@@ -1091,18 +1194,28 @@ export default function App() {
 
                         {/* List Codes */}
                         <div className="mt-6">
-                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase">Códigos Ativos ({serverCodes.length})</h3>
+                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase">Códigos Gerados ({serverCodes.length})</h3>
                             <div className="space-y-2">
-                                {serverCodes.length === 0 && <p className="text-xs text-slate-600 italic">Nenhum código ativo.</p>}
-                                {serverCodes.map((code, idx) => (
-                                    <div key={idx} className="bg-slate-800 p-2 rounded border border-slate-700 flex justify-between items-center">
-                                        <div>
-                                            <span className="font-bold text-yellow-400">{code.code}</span>
-                                            <span className="text-xs text-slate-400 ml-2">({code.type === 'MONEY' ? '$' : 'x'}{code.value})</span>
+                                {serverCodes.length === 0 && <p className="text-xs text-slate-600 italic">Nenhum código gerado.</p>}
+                                {serverCodes.map((code, idx) => {
+                                    const timeLeft = Math.max(0, Math.ceil((code.createdAt + CODE_EXPIRATION_MS - Date.now()) / 1000));
+                                    const isExpired = timeLeft === 0;
+
+                                    return (
+                                        <div key={idx} className={`bg-slate-800 p-2 rounded border flex justify-between items-center ${isExpired ? 'border-red-900 opacity-50' : 'border-green-700'}`}>
+                                            <div>
+                                                <span className="font-bold text-yellow-400">{code.code}</span>
+                                                <span className="text-xs text-slate-400 ml-2">({code.type === 'MONEY' ? '$' : 'x'}{code.value})</span>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <span className={`text-xs font-mono flex items-center gap-1 ${isExpired ? 'text-red-500' : 'text-green-400'}`}>
+                                                    <Clock size={12} /> {timeLeft}s
+                                                </span>
+                                                <button onClick={() => handleDeleteCode(code.code)} className="text-slate-500 hover:text-red-500"><Trash2 size={14} /></button>
+                                            </div>
                                         </div>
-                                        <button onClick={() => handleDeleteCode(code.code)} className="text-slate-500 hover:text-red-500"><Trash2 size={14} /></button>
-                                    </div>
-                                ))}
+                                    );
+                                })}
                             </div>
                         </div>
                     </div>
