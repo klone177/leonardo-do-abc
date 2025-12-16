@@ -1,10 +1,12 @@
 export enum Tab {
-  PRODUCTS = 'Produtos',
-  STAFF = 'Equipe',
-  UPGRADES = 'Melhorias',
-  PROFILE = 'Perfil',
-  RANKING = 'Ranking',
-  ADMIN = 'Admin'
+  PRODUCTS = 'LOJA',
+  STAFF = 'EQUIPE',
+  UPGRADES = 'POWER-UP',
+  CREDITS = 'VIP',
+  PROFILE = 'PERFIL',
+  RANKING = 'TOP',
+  CHAT = 'CHAT', // Nova aba
+  ADMIN = 'GM'
 }
 
 export interface Product {
@@ -13,8 +15,9 @@ export interface Product {
   icon: string;
   baseCost: number;
   baseRevenue: number;
-  costMultiplier: number; // Usually around 1.15
+  costMultiplier: number;
   unlockCost: number;
+  reqPrestige: number; // Nível de cargo necessário
 }
 
 export interface Staff {
@@ -23,8 +26,8 @@ export interface Staff {
   role: string;
   description: string;
   baseCost: number;
-  multiplier: number; // Multiplies global income or specific product
-  affectsId?: string; // 'global' or product ID
+  multiplier: number; 
+  affectsId?: string; 
 }
 
 export interface Upgrade {
@@ -32,15 +35,7 @@ export interface Upgrade {
   name: string;
   description: string;
   cost: number;
-  triggerId?: string; // Only show if this product is unlocked
-}
-
-export interface Achievement {
-  id: string;
-  name: string;
-  description: string;
-  condition: (state: GameState) => boolean;
-  unlocked: boolean;
+  triggerId?: string; 
 }
 
 export interface GameState {
@@ -54,43 +49,55 @@ export interface GameState {
   hiredStaff: Record<string, boolean>;
   purchasedUpgrades: Record<string, boolean>;
   
+  // New Features
+  credits: number;        // Moeda VIP
+  playTime: number;       // Segundos online totais
+  creditMultiplier: number; // Multiplicador comprado com créditos
+  chatColor: string;      // Cor do chat escolhida pelo user
+  
   // Prestige
-  prestigeLevel: number; // 0 = Repositor, 1 = Líder, etc.
+  prestigeLevel: number; 
   prestigeMultiplier: number;
   
-  // Codes
-  redeemedCodes: string[];
-
   // Settings
   soundEnabled: boolean;
-}
-
-export interface GameCode {
-  code: string;
-  type: 'MONEY' | 'MULTIPLIER';
-  value: number;
-  createdBy: string;
-  createdAt: number; // Timestamp for expiration
 }
 
 export interface LeaderboardEntry {
   username: string;
   prestigeLevel: number;
   lifetimeEarnings: number;
+  playTime: number; // Novo campo para ranking de tempo
   title: string;
 }
 
-export const TITLES = [
-  "Repositor Júnior",
-  "Repositor Sênior",
-  "Líder de Corredor",
-  "Sub-Gerente",
-  "Gerente de Setor",
-  "Gerente Geral",
-  "Diretor Regional",
-  "Sócio Minoritário",
-  "Sócio Majoritário",
-  "Dono do ABC",
-  "Magnata do Varejo",
-  "Lenda do Mercado"
+export interface ChatMessage {
+  id: string;
+  username: string;
+  title: string;
+  text: string;
+  color?: string; // Cor da mensagem específica
+  timestamp: number;
+  isSystem?: boolean;
+}
+
+export interface TitleDefinition {
+  name: string;
+  cost: number;
+}
+
+// Custos para subir de cargo (Acumulado Vitalício)
+export const TITLES: TitleDefinition[] = [
+  { name: "NOOB", cost: 0 },
+  { name: "REPOSITOR", cost: 1000000 }, // 1M
+  { name: "CAIXA", cost: 5000000 }, // 5M
+  { name: "FISCAL", cost: 25000000 }, // 25M
+  { name: "GERENTE", cost: 100000000 }, // 100M
+  { name: "DIRETOR", cost: 500000000 }, // 500M
+  { name: "CEO", cost: 2500000000 }, // 2.5B
+  { name: "SÓCIO", cost: 10000000000 }, // 10B
+  { name: "DONO", cost: 50000000000 }, // 50B
+  { name: "MAGNATA", cost: 250000000000 }, // 250B
+  { name: "LENDA", cost: 1000000000000 }, // 1T
+  { name: "DEUS VAREJO", cost: 10000000000000 } // 10T
 ];

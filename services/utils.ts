@@ -12,6 +12,33 @@ export const formatMoney = (amount: number): string => {
   return shortValue + suffixes[suffixNum];
 };
 
+export const formatTime = (seconds: number): string => {
+    const h = Math.floor(seconds / 3600);
+    const m = Math.floor((seconds % 3600) / 60);
+    const s = seconds % 60;
+    
+    if (h > 0) return `${h}h ${m}m`;
+    return `${m}m ${s}s`;
+};
+
+// --- PROFANITY FILTER ---
+const BAD_WORDS = [
+  "merda", "bosta", "porra", "caralho", "puta", "puto", "buceta", "pinto", "cú", "cu", 
+  "foder", "foda", "caralhos", "vagabunda", "arrombado", "fudido", "fuck", "shit", "ass", 
+  "bitch", "piss", "dick", "cock", "pussy", "nigger", "fag", "viado", "gay", "corno" 
+  // Adicione mais conforme necessário, lista básica
+];
+
+export const filterProfanity = (text: string): string => {
+  let filtered = text;
+  BAD_WORDS.forEach(word => {
+     // Cria um regex case insensitive para a palavra
+     const regex = new RegExp(`\\b${word}\\b`, 'gi');
+     filtered = filtered.replace(regex, '*'.repeat(word.length));
+  });
+  return filtered;
+};
+
 // --- SECURITY SYSTEM ---
 const SECRET_SALT = "LEONARDO_ABC_SECURE_KEY_V1_2025_#$@!";
 
@@ -35,7 +62,7 @@ export const verifySaveHash = (data: any, originalHash: string): boolean => {
 // Simple audio synth
 const audioCtx = typeof window !== 'undefined' && window.AudioContext ? new window.AudioContext() : null;
 
-export const playSound = (type: 'click' | 'buy' | 'upgrade', enabled: boolean) => {
+export const playSound = (type: 'click' | 'buy' | 'upgrade' | 'coin' | 'message', enabled: boolean) => {
   if (!enabled || !audioCtx) return;
   if (audioCtx.state === 'suspended') audioCtx.resume();
 
@@ -69,5 +96,22 @@ export const playSound = (type: 'click' | 'buy' | 'upgrade', enabled: boolean) =
     gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.4);
     oscillator.start();
     oscillator.stop(audioCtx.currentTime + 0.4);
+  } else if (type === 'coin') {
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(900, audioCtx.currentTime);
+    oscillator.frequency.setValueAtTime(1200, audioCtx.currentTime + 0.05);
+    gainNode.gain.setValueAtTime(0.1, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.3);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.3);
+  } else if (type === 'message') {
+    // Low notification blip
+    oscillator.type = 'sine';
+    oscillator.frequency.setValueAtTime(400, audioCtx.currentTime);
+    oscillator.frequency.setValueAtTime(600, audioCtx.currentTime + 0.1);
+    gainNode.gain.setValueAtTime(0.05, audioCtx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0, audioCtx.currentTime + 0.15);
+    oscillator.start();
+    oscillator.stop(audioCtx.currentTime + 0.15);
   }
 };

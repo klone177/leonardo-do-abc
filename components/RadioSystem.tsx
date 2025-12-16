@@ -12,7 +12,7 @@ export const RadioSystem: React.FC = () => {
   const [volume, setVolume] = useState(0.5);
   
   const audioRef = useRef<HTMLAudioElement>(null);
-  const volumeRef = useRef(volume); // Ref to access latest volume in timeouts/callbacks
+  const volumeRef = useRef(volume);
 
   // Update volume ref and audio element
   useEffect(() => {
@@ -87,7 +87,7 @@ export const RadioSystem: React.FC = () => {
     }, randomTime);
 
     return () => clearTimeout(timer);
-  }, [isPlaying, playlist, currentTrackIndex]); // Re-schedule after interactions
+  }, [isPlaying, playlist, currentTrackIndex]); 
 
   // --- Audio Effects ---
 
@@ -108,16 +108,15 @@ export const RadioSystem: React.FC = () => {
         osc.stop(start + duration);
     };
 
-    // "Ding-Dong" sound
-    playTone(660, t, 0.6); // High E
-    playTone(550, t + 0.4, 0.8); // Lower C#
+    // 8-bit Chime
+    playTone(660, t, 0.2); 
+    playTone(880, t + 0.2, 0.4); 
     
-    return 1500; // Duration of chime in ms
+    return 1000; 
   };
 
   const getBestVoice = () => {
     const voices = window.speechSynthesis.getVoices();
-    // Prioritize "Google Português" or "Microsoft" voices which are more natural
     return voices.find(v => v.lang === 'pt-BR' && v.name.includes('Google')) ||
            voices.find(v => v.lang === 'pt-BR' && v.name.includes('Natural')) ||
            voices.find(v => v.lang === 'pt-BR');
@@ -130,17 +129,16 @@ export const RadioSystem: React.FC = () => {
     const product = INITIAL_PRODUCTS[Math.floor(Math.random() * INITIAL_PRODUCTS.length)];
     const discount = Math.floor(Math.random() * 30) + 10;
     const phrases = [
-        `Atenção senhores clientes! Oferta relâmpago no setor de ${product.name}!`,
-        `Somente hoje! ${product.name} com ${discount}% de desconto! Aproveite!`,
-        `Limpeza total de estoque em ${product.name}. Corra antes que acabe!`,
-        `Atenção! ${product.name} com preço de custo no corredor central.`
+        `OFERTA NO SETOR: ${product.name}!`,
+        `${product.name} COM ${discount}% OFF!`,
+        `LIMPEZA DE ESTOQUE: ${product.name}!`,
     ];
     const text = phrases[Math.floor(Math.random() * phrases.length)];
 
     setIsAnnouncing(true);
     setAnnouncementText(text);
 
-    // 1. Duck Music relative to current volume (keep it very low but audible if volume is high)
+    // 1. Duck Music 
     const currentVol = volumeRef.current;
     if (audioRef.current) {
         audioRef.current.volume = Math.min(currentVol * 0.1, 0.05); 
@@ -156,27 +154,14 @@ export const RadioSystem: React.FC = () => {
         if (bestVoice) utterance.voice = bestVoice;
         
         utterance.lang = 'pt-BR';
-        utterance.volume = 1.0; // Max volume for voice
+        utterance.volume = 1.0; 
         utterance.rate = 1.05; 
         utterance.pitch = 1.0; 
 
         utterance.onend = () => {
             // 4. Restore music
             if (audioRef.current) {
-                const targetVol = volumeRef.current;
-                // Fade back in
-                const fadeInterval = setInterval(() => {
-                    if (!audioRef.current) {
-                         clearInterval(fadeInterval);
-                         return;
-                    }
-                    if (audioRef.current.volume >= targetVol) {
-                        audioRef.current.volume = targetVol;
-                        clearInterval(fadeInterval);
-                        return;
-                    }
-                    audioRef.current.volume = Math.min(targetVol, audioRef.current.volume + 0.05);
-                }, 100);
+                audioRef.current.volume = volumeRef.current;
             }
             setIsAnnouncing(false);
             setAnnouncementText('');
@@ -187,7 +172,7 @@ export const RadioSystem: React.FC = () => {
   };
 
   return (
-    <div className="bg-slate-800 text-white p-3 rounded-xl shadow-lg flex flex-col gap-3 w-full max-w-xs mx-auto md:mx-0 border border-slate-600 relative">
+    <div className="bg-gray-800 p-2 border-4 border-black shadow-[4px_4px_0px_0px_#000] w-full max-w-xs mx-auto md:mx-0 relative">
       
       {/* Hidden Audio Element */}
       <audio 
@@ -196,79 +181,69 @@ export const RadioSystem: React.FC = () => {
         className="hidden"
       />
 
-      {/* Header */}
-      <div className="flex items-center justify-between">
+      {/* Header (Speaker Mesh Look) */}
+      <div className="flex items-center justify-between bg-gray-900 p-2 border-2 border-gray-600 mb-2">
         <div className="flex items-center gap-2">
-           <Volume2 size={18} className="text-green-400" />
-           <span className="font-display font-bold text-sm tracking-wide">Rádio ABC</span>
+           <Volume2 size={16} className="text-red-500" />
+           <span className="font-pixel text-xs text-gray-300 tracking-wide">RADIO-88</span>
         </div>
         
         {isAnnouncing && (
-            <span className="text-xs text-yellow-400 animate-pulse font-bold flex items-center gap-1 bg-yellow-400/10 px-2 py-0.5 rounded-full border border-yellow-400/20">
-                <Mic size={10} /> AO VIVO
+            <span className="text-[10px] text-yellow-300 font-pixel animate-pulse bg-red-600 px-1">
+               LIVE
             </span>
         )}
       </div>
 
-      {/* Track Info Display */}
-      <div className="bg-black/40 p-3 rounded-lg text-xs flex items-center justify-center text-center h-10 border border-slate-700/50">
+      {/* LCD Display */}
+      <div className="bg-green-900 p-2 mb-2 border-inset border-4 border-gray-700 h-12 flex items-center justify-center overflow-hidden">
         {isAnnouncing ? (
-            <span className="text-yellow-300 italic animate-pulse">"{announcementText}"</span>
+            <span className="text-green-300 font-mono text-sm animate-pulse">{announcementText}</span>
         ) : playlist.length > 0 ? (
-            <div className="flex flex-col overflow-hidden">
-                <span className="font-bold text-slate-200 truncate w-full">{playlist[currentTrackIndex].name}</span>
+            <div className="w-full text-center">
+                <span className="font-pixel text-xs text-green-300 whitespace-nowrap scroll-text">{playlist[currentTrackIndex].name.substring(0, 20)}</span>
             </div>
         ) : (
-            <span className="text-slate-500 italic">Nenhuma música selecionada</span>
+            <span className="text-green-800 font-pixel text-xs">NO TAPE</span>
         )}
       </div>
 
-      {/* Transport Controls */}
-      <div className="flex items-center justify-between gap-2">
-        <label className="cursor-pointer bg-slate-700 hover:bg-slate-600 p-2 rounded-lg transition text-xs flex items-center gap-1.5 text-slate-300" title="Carregar MP3">
-          <Upload size={14} />
-          <span className="hidden sm:inline">Add</span>
+      {/* Controls */}
+      <div className="flex items-center justify-between gap-1 mb-2">
+        <label className="cursor-pointer bg-gray-300 hover:bg-white p-2 border-2 border-black retro-btn text-xs flex items-center justify-center w-full" title="Carregar">
+          <Upload size={14} className="text-black" />
           <input type="file" accept="audio/*" multiple onChange={handleFileUpload} className="hidden" />
         </label>
 
-        <div className="flex items-center gap-2 bg-slate-900/50 p-1 rounded-full border border-slate-700">
-            <button 
-                onClick={togglePlay}
-                disabled={playlist.length === 0}
-                className={`w-8 h-8 flex items-center justify-center rounded-full transition ${playlist.length === 0 ? 'bg-slate-800 text-slate-600' : isPlaying ? 'bg-yellow-500 text-black hover:bg-yellow-400' : 'bg-green-600 text-white hover:bg-green-500'}`}
-            >
-                {isPlaying ? <Pause size={14} fill="currentColor" /> : <Play size={14} fill="currentColor" className="ml-0.5" />}
-            </button>
+        <button 
+            onClick={togglePlay}
+            disabled={playlist.length === 0}
+            className={`w-full p-2 border-2 border-black retro-btn flex justify-center ${isPlaying ? 'bg-yellow-400' : 'bg-green-500'}`}
+        >
+            {isPlaying ? <Pause size={14} className="text-black" /> : <Play size={14} className="text-black" />}
+        </button>
 
-            <button 
-                onClick={playNext}
-                disabled={playlist.length === 0}
-                className="w-8 h-8 flex items-center justify-center rounded-full bg-slate-700 hover:bg-slate-600 text-slate-200 transition disabled:opacity-30 disabled:hover:bg-slate-700"
-                title="Pular"
-            >
-                <SkipForward size={14} />
-            </button>
-        </div>
+        <button 
+            onClick={playNext}
+            disabled={playlist.length === 0}
+            className="w-full p-2 bg-gray-300 hover:bg-white border-2 border-black retro-btn flex justify-center"
+        >
+            <SkipForward size={14} className="text-black" />
+        </button>
 
         <button 
             onClick={() => setShowPlaylist(!showPlaylist)}
             disabled={playlist.length === 0}
-            className={`p-2 rounded-lg transition relative ${showPlaylist ? 'bg-blue-600 text-white' : 'bg-slate-700 text-slate-300 hover:bg-slate-600'} disabled:opacity-50`}
-            title="Playlist"
+            className={`w-full p-2 border-2 border-black retro-btn flex justify-center ${showPlaylist ? 'bg-blue-400' : 'bg-gray-300'}`}
         >
-            <ListMusic size={16} />
-            {playlist.length > 0 && (
-                <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[9px] w-4 h-4 flex items-center justify-center rounded-full font-bold border border-slate-800">
-                    {playlist.length}
-                </span>
-            )}
+            <ListMusic size={14} className="text-black" />
         </button>
       </div>
 
       {/* Volume Slider */}
-      <div className="flex items-center gap-2 px-1 pt-1 border-t border-slate-700/50">
-         <button onClick={() => setVolume(volume === 0 ? 0.5 : 0)} className="text-slate-400 hover:text-white transition">
-            {volume === 0 ? <VolumeX size={16} /> : volume < 0.5 ? <Volume1 size={16} /> : <Volume2 size={16} />}
+      <div className="flex items-center gap-2 px-1">
+         <button onClick={() => setVolume(volume === 0 ? 0.5 : 0)} className="text-gray-400 hover:text-white">
+            {volume === 0 ? <VolumeX size={14} /> : <Volume2 size={14} />}
          </button>
          <input 
            type="range" 
@@ -277,33 +252,26 @@ export const RadioSystem: React.FC = () => {
            step="0.05" 
            value={volume} 
            onChange={(e) => setVolume(parseFloat(e.target.value))}
-           className="w-full h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-green-500 hover:accent-green-400 transition-all"
-           style={{
-             backgroundImage: `linear-gradient(to right, #22c55e ${volume * 100}%, #334155 ${volume * 100}%)`
-           }}
+           className="w-full h-2 bg-gray-700 appearance-none cursor-pointer border border-gray-600"
          />
       </div>
 
-      {/* Playlist Overlay */}
+      {/* Playlist Overlay (Cassette Case) */}
       {showPlaylist && playlist.length > 0 && (
-          <div className="absolute top-full left-0 w-full mt-2 bg-slate-900 border border-slate-600 rounded-xl shadow-2xl z-50 max-h-56 overflow-y-auto custom-scrollbar">
-              <div className="p-2 border-b border-slate-700 flex justify-between items-center sticky top-0 bg-slate-900 z-10">
-                  <span className="text-xs font-bold text-slate-400 px-1">Fila ({playlist.length})</span>
-                  <button onClick={() => setShowPlaylist(false)} className="p-1 hover:bg-slate-800 rounded"><X size={12} className="text-slate-400" /></button>
+          <div className="absolute top-full left-0 w-full mt-2 bg-gray-100 border-4 border-black z-50 max-h-48 overflow-y-auto font-mono">
+              <div className="p-1 border-b-2 border-black flex justify-between items-center bg-gray-300 sticky top-0">
+                  <span className="text-[10px] font-bold px-1">TRACKS ({playlist.length})</span>
+                  <button onClick={() => setShowPlaylist(false)}><X size={12} /></button>
               </div>
-              <ul className="divide-y divide-slate-800">
+              <ul className="divide-y divide-gray-400">
                   {playlist.map((file, idx) => (
                       <li 
                         key={idx} 
                         onClick={() => selectTrack(idx)}
-                        className={`p-2.5 text-xs cursor-pointer hover:bg-slate-800 transition flex items-center gap-3 ${idx === currentTrackIndex ? 'bg-slate-800/80' : ''}`}
+                        className={`p-2 text-[10px] cursor-pointer hover:bg-blue-100 flex items-center gap-2 ${idx === currentTrackIndex ? 'bg-blue-200 font-bold' : ''}`}
                       >
-                          <span className={`w-5 text-center font-bold ${idx === currentTrackIndex ? 'text-green-400' : 'text-slate-500'}`}>
-                            {idx === currentTrackIndex && isPlaying ? <span className="animate-pulse">▶</span> : idx + 1}
-                          </span>
-                          <span className={`truncate flex-1 ${idx === currentTrackIndex ? 'text-green-400 font-bold' : 'text-slate-300'}`}>
-                            {file.name}
-                          </span>
+                          <span>{idx + 1}.</span>
+                          <span className="truncate">{file.name}</span>
                       </li>
                   ))}
               </ul>

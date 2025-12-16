@@ -16,8 +16,12 @@ export const FloatingText: React.FC<FloatingTextProps> = ({ x, y, value, onCompl
 
   return (
     <div 
-      className="fixed pointer-events-none text-green-600 font-bold text-xl animate-float-up z-50 select-none shadow-sm"
-      style={{ left: x, top: y }}
+      className="fixed pointer-events-none text-green-500 font-bold text-2xl animate-float-up z-50 select-none font-pixel"
+      style={{ 
+          left: x, 
+          top: y,
+          textShadow: '2px 2px 0 #000' 
+      }}
     >
       +${formatMoney(value)}
     </div>

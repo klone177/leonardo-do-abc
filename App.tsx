@@ -13,22 +13,20 @@ import {
   Zap,
   Lock,
   User,
-  UserPlus,
-  LogIn,
   ShieldAlert,
-  Ticket,
-  PlusCircle,
-  Trash2,
   Globe,
-  Medal,
-  CheckCircle,
-  XCircle,
+  AlertTriangle,
+  Play,
+  Gem,
   Clock,
-  AlertTriangle
+  Coins,
+  MessageSquare,
+  Send,
+  Palette
 } from 'lucide-react';
 import { INITIAL_PRODUCTS, AVAILABLE_STAFF, UPGRADES, FUNNY_QUOTES } from './constants';
-import { GameState, Tab, TITLES, Product, GameCode, LeaderboardEntry } from './types';
-import { formatMoney, playSound, generateSaveHash, verifySaveHash } from './services/utils';
+import { GameState, Tab, TITLES, Product, LeaderboardEntry, ChatMessage } from './types';
+import { formatMoney, formatTime, playSound, generateSaveHash, verifySaveHash, filterProfanity } from './services/utils';
 import { FloatingText } from './components/FloatingText';
 import { RadioSystem } from './components/RadioSystem';
 
@@ -41,25 +39,42 @@ const INITIAL_STATE: GameState = {
   productLevels: { balas: 1 }, // Start with Candy
   hiredStaff: {},
   purchasedUpgrades: {},
+  
+  // New Features Defaults
+  credits: 0,
+  playTime: 0,
+  creditMultiplier: 1,
+  chatColor: '#000000', // Default Black
+
   prestigeLevel: 0,
   prestigeMultiplier: 1,
-  redeemedCodes: [],
   soundEnabled: true,
 };
 
 type BuyAmount = 1 | 10 | 25 | 50 | 100 | 'MAX';
 type AuthMode = 'login' | 'register';
+type RankingMode = 'MONEY' | 'TIME';
 
 const PRESTIGE_BONUS_PER_LEVEL = 0.25; // 25% per level
-const CODE_EXPIRATION_MS = 60 * 1000; // 1 Minute
-const RANKING_UPDATE_MS = 5 * 60 * 1000; // 5 Minutes
+const RANKING_UPDATE_MS = 60 * 1000; // 1 Minute
+
+// Chat Colors Palette
+const CHAT_COLORS = [
+    '#000000', // Black
+    '#1d4ed8', // Blue
+    '#dc2626', // Red
+    '#15803d', // Green
+    '#7e22ce', // Purple
+    '#c2410c', // Orange
+    '#be185d', // Pink
+];
 
 // Fake data for leaderboard initialization
 const INITIAL_BOTS: LeaderboardEntry[] = [
-  { username: "MasterMarket", prestigeLevel: 8, lifetimeEarnings: 500000000000, title: TITLES[8] },
-  { username: "SandraCaixa", prestigeLevel: 5, lifetimeEarnings: 45000000, title: TITLES[5] },
-  { username: "SrBarriga", prestigeLevel: 7, lifetimeEarnings: 12000000000, title: TITLES[7] },
-  { username: "RepositorFlash", prestigeLevel: 2, lifetimeEarnings: 50000, title: TITLES[2] },
+  { username: "MasterMarket", prestigeLevel: 8, lifetimeEarnings: 500000000000, title: TITLES[8].name, playTime: 36000 },
+  { username: "SandraCaixa", prestigeLevel: 5, lifetimeEarnings: 45000000, title: TITLES[5].name, playTime: 12000 },
+  { username: "SrBarriga", prestigeLevel: 7, lifetimeEarnings: 12000000000, title: TITLES[7].name, playTime: 86000 },
+  { username: "RepositorFlash", prestigeLevel: 2, lifetimeEarnings: 50000, title: TITLES[2].name, playTime: 500 },
 ];
 
 export default function App() {
@@ -78,19 +93,15 @@ export default function App() {
   const [quote, setQuote] = useState(FUNNY_QUOTES[0]);
   const [offlineEarnings, setOfflineEarnings] = useState<number | null>(null);
   const [buyAmount, setBuyAmount] = useState<BuyAmount>(1);
+  const [rankingMode, setRankingMode] = useState<RankingMode>('MONEY');
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>([]);
   const [showPrestigeModal, setShowPrestigeModal] = useState(false);
   const [cheaterDetected, setCheaterDetected] = useState(false);
-
-  // Code System State
-  const [codeInput, setCodeInput] = useState('');
-  const [codeMessage, setCodeMessage] = useState<{type: 'success'|'error', text: string} | null>(null);
   
-  // Admin State
-  const [newCodeName, setNewCodeName] = useState('');
-  const [newCodeType, setNewCodeType] = useState<'MONEY' | 'MULTIPLIER'>('MONEY');
-  const [newCodeValue, setNewCodeValue] = useState(1000);
-  const [serverCodes, setServerCodes] = useState<GameCode[]>([]);
+  // Chat State
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([]);
+  const [chatInput, setChatInput] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
 
   // Refs for loop
   const stateRef = useRef(gameState);
@@ -102,91 +113,159 @@ export default function App() {
 
   // --- Initialization & Global Data ---
 
-  // Load Codes and Initial Leaderboard
+  // Load Initial Leaderboards (Legacy support handled in Update)
   useEffect(() => {
-    const storedCodes = localStorage.getItem('leonardo_server_codes');
-    if (storedCodes) {
-      try {
-        setServerCodes(JSON.parse(storedCodes));
-      } catch (e) { setServerCodes([]); }
+    if (!localStorage.getItem('leonardo_rank_money')) {
+        localStorage.setItem('leonardo_rank_money', JSON.stringify(INITIAL_BOTS));
     }
-
-    // Initialize Leaderboard with bots if empty
-    const storedLeaderboard = localStorage.getItem('leonardo_global_users');
-    if (!storedLeaderboard) {
-      localStorage.setItem('leonardo_global_users', JSON.stringify(INITIAL_BOTS));
-      setLeaderboard(INITIAL_BOTS);
+    
+    // Load Chat
+    const storedChat = localStorage.getItem('leonardo_global_chat');
+    if (storedChat) {
+        setChatMessages(JSON.parse(storedChat));
     } else {
-      try {
-        setLeaderboard(JSON.parse(storedLeaderboard));
-      } catch (e) {
-        setLeaderboard(INITIAL_BOTS);
-      }
+        const welcomeMsg: ChatMessage = {
+            id: 'init-1',
+            username: 'SYSTEM',
+            title: 'BOT',
+            text: 'Bem-vindo ao Chat Global! Respeite as regras.',
+            color: '#dc2626',
+            timestamp: Date.now(),
+            isSystem: true
+        };
+        setChatMessages([welcomeMsg]);
     }
   }, []);
 
-  // Update Ranking every 5 Minutes
+  // Scroll to bottom of chat
+  useEffect(() => {
+     if (activeTab === Tab.CHAT) {
+         chatEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+     }
+  }, [chatMessages, activeTab]);
+
+  // Update Ranking every 1 Minute
   useEffect(() => {
     if (!username || cheaterDetected) return;
 
     const updateRank = () => {
         if (usernameRef.current && !cheaterDetected) {
-            updateGlobalLeaderboard(usernameRef.current, stateRef.current);
-            // Also refresh local view
-            const storedLeaderboard = localStorage.getItem('leonardo_global_users');
-            if (storedLeaderboard) setLeaderboard(JSON.parse(storedLeaderboard));
+            updateGlobalLeaderboards(usernameRef.current, stateRef.current);
+            refreshLocalLeaderboard(rankingMode);
         }
     };
+    
+    // Simulate Chat Activity (Bots)
+    const chatBotInterval = setInterval(() => {
+        if (Math.random() < 0.2) { // 20% chance every check
+             const bots = ["MasterMarket", "SandraCaixa", "SrBarriga", "RepositorFlash"];
+             const msgs = ["Alguem sabe como upa rapido?", "Acabei de virar Gerente!", "Opa, tudo bom?", "Esse jogo é viciante kkk", "Comprei o upgrade do tênis, muito bom."];
+             const randomBot = bots[Math.floor(Math.random() * bots.length)];
+             const randomMsg = msgs[Math.floor(Math.random() * msgs.length)];
+             
+             // Bots always use Dark Yellow
+             addChatMessage(randomBot, "BOT", randomMsg, '#b45309');
+        }
+    }, 15000);
 
-    // Initial update on login is handled in loadUser, here we set the interval
+    // Initial update
+    refreshLocalLeaderboard(rankingMode);
+
     const interval = setInterval(updateRank, RANKING_UPDATE_MS);
-    return () => clearInterval(interval);
-  }, [username, cheaterDetected]);
+    return () => {
+        clearInterval(interval);
+        clearInterval(chatBotInterval);
+    };
+  }, [username, cheaterDetected, rankingMode]);
 
-  // Clean up expired codes from Admin view periodically
-  useEffect(() => {
-    if (!isAdmin) return;
-    const interval = setInterval(() => {
-        setServerCodes(prev => [...prev]); // Force re-render to update timers
-    }, 1000);
-    return () => clearInterval(interval);
-  }, [isAdmin]);
+  const refreshLocalLeaderboard = (mode: RankingMode) => {
+      const key = mode === 'MONEY' ? 'leonardo_rank_money' : 'leonardo_rank_time';
+      const stored = localStorage.getItem(key);
+      if (stored) {
+          try {
+              setLeaderboard(JSON.parse(stored));
+          } catch(e) { setLeaderboard(INITIAL_BOTS); }
+      } else {
+          setLeaderboard(INITIAL_BOTS);
+      }
+  }
 
-  const saveServerCodes = (codes: GameCode[]) => {
-    setServerCodes(codes);
-    localStorage.setItem('leonardo_server_codes', JSON.stringify(codes));
-  };
-
-  const updateGlobalLeaderboard = (user: string, state: GameState) => {
-    const currentListStr = localStorage.getItem('leonardo_global_users');
-    let list: LeaderboardEntry[] = currentListStr ? JSON.parse(currentListStr) : [...INITIAL_BOTS];
+  const updateGlobalLeaderboards = (user: string, state: GameState) => {
+    // 1. Update Money Ranking
+    const moneyStr = localStorage.getItem('leonardo_rank_money');
+    let moneyList: LeaderboardEntry[] = moneyStr ? JSON.parse(moneyStr) : [...INITIAL_BOTS];
     
-    // Remove existing entry for this user
-    list = list.filter(u => u.username !== user);
-    
-    // Add updated entry
+    // Create Entry
     const titleIndex = Math.min(state.prestigeLevel, TITLES.length - 1);
-    list.push({
-      username: user,
-      prestigeLevel: state.prestigeLevel,
-      lifetimeEarnings: state.lifetimeEarnings,
-      title: TITLES[titleIndex]
-    });
+    const entry: LeaderboardEntry = {
+        username: user,
+        prestigeLevel: state.prestigeLevel,
+        lifetimeEarnings: state.lifetimeEarnings,
+        playTime: state.playTime,
+        title: TITLES[titleIndex].name
+    };
 
-    // Sort: 1. Prestige (Desc), 2. Earnings (Desc)
-    list.sort((a, b) => {
-      if (b.prestigeLevel !== a.prestigeLevel) return b.prestigeLevel - a.prestigeLevel;
-      return b.lifetimeEarnings - a.lifetimeEarnings;
-    });
+    // Update Money List
+    moneyList = moneyList.filter(u => u.username !== user);
+    moneyList.push(entry);
+    moneyList.sort((a, b) => b.lifetimeEarnings - a.lifetimeEarnings); // Pure Money Sort
+    localStorage.setItem('leonardo_rank_money', JSON.stringify(moneyList.slice(0, 50)));
 
-    localStorage.setItem('leonardo_global_users', JSON.stringify(list));
+    // 2. Update Time Ranking
+    const timeStr = localStorage.getItem('leonardo_rank_time');
+    let timeList: LeaderboardEntry[] = timeStr ? JSON.parse(timeStr) : [...INITIAL_BOTS];
+    
+    timeList = timeList.filter(u => u.username !== user);
+    timeList.push(entry);
+    timeList.sort((a, b) => b.playTime - a.playTime); // Pure Time Sort
+    localStorage.setItem('leonardo_rank_time', JSON.stringify(timeList.slice(0, 50)));
   };
 
   const checkUserExists = (user: string): boolean => {
-    const currentListStr = localStorage.getItem('leonardo_global_users');
-    if (!currentListStr) return false;
-    const list: LeaderboardEntry[] = JSON.parse(currentListStr);
-    return list.some(u => u.username.toLowerCase() === user.toLowerCase());
+    const list = localStorage.getItem('leonardo_rank_money');
+    if (!list) return false;
+    const entries: LeaderboardEntry[] = JSON.parse(list);
+    return entries.some(u => u.username.toLowerCase() === user.toLowerCase());
+  };
+
+  // --- CHAT LOGIC ---
+  const addChatMessage = (user: string, title: string, text: string, color?: string) => {
+      const newMsg: ChatMessage = {
+          id: Date.now().toString() + Math.random().toString(),
+          username: user,
+          title: title,
+          text: filterProfanity(text),
+          color: color || '#000000',
+          timestamp: Date.now()
+      };
+      
+      setChatMessages(prev => {
+          const updated = [...prev, newMsg].slice(-50); // Keep last 50
+          localStorage.setItem('leonardo_global_chat', JSON.stringify(updated));
+          return updated;
+      });
+      
+      // Only play sound if chat is open or not local user
+      if (user !== usernameRef.current) {
+         playSound('message', stateRef.current.soundEnabled);
+      }
+  };
+
+  const handleSendMessage = (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!chatInput.trim() || !username) return;
+      
+      const currentTitle = TITLES[Math.min(gameState.prestigeLevel, TITLES.length - 1)].name;
+      // Use User's Selected Color
+      addChatMessage(username, currentTitle, chatInput, gameState.chatColor);
+      setChatInput('');
+  };
+
+  const changeChatColor = (color: string) => {
+      setGameState(prev => ({
+          ...prev,
+          chatColor: color
+      }));
   };
 
   // --- Calculations ---
@@ -236,7 +315,7 @@ export default function App() {
     if (productId === 'agua' && gameState.purchasedUpgrades['leitor']) income *= 2;
     if (productId === 'balas' && gameState.purchasedUpgrades['leitor']) income *= 2;
     if (productId === 'padaria' && gameState.purchasedUpgrades['forno']) income *= 3;
-    if (productId === 'arroz' && gameState.purchasedUpgrades['paleteira']) income *= 3;
+    if (productId === 'hortifruti' && gameState.purchasedUpgrades['caminhao']) income *= 3;
     
     // Global Upgrades
     if (gameState.purchasedUpgrades['ar']) income *= 1.2;
@@ -244,8 +323,11 @@ export default function App() {
     // Prestige Multiplier
     income *= gameState.prestigeMultiplier;
 
+    // Credit VIP Multiplier
+    income *= (gameState.creditMultiplier || 1);
+
     return income;
-  }, [gameState.hiredStaff, gameState.purchasedUpgrades, gameState.prestigeMultiplier]);
+  }, [gameState.hiredStaff, gameState.purchasedUpgrades, gameState.prestigeMultiplier, gameState.creditMultiplier]);
 
   const calculateTotalEPS = useCallback(() => {
     let total = 0;
@@ -260,8 +342,9 @@ export default function App() {
     power += calculateTotalEPS() * 0.05; 
     if (gameState.purchasedUpgrades['tenis']) power *= 2;
     power *= gameState.prestigeMultiplier;
+    power *= (gameState.creditMultiplier || 1);
     return Math.max(1, power);
-  }, [calculateTotalEPS, gameState.purchasedUpgrades, gameState.prestigeMultiplier]);
+  }, [calculateTotalEPS, gameState.purchasedUpgrades, gameState.prestigeMultiplier, gameState.creditMultiplier]);
 
   // --- Auth Logic ---
 
@@ -271,7 +354,7 @@ export default function App() {
     setLoginSuccess(null);
 
     if (!loginInput.trim() || !passwordInput.trim()) {
-        setLoginError("Preencha todos os campos.");
+        setLoginError("PREENCHA TUDO.");
         return;
     }
     
@@ -284,11 +367,11 @@ export default function App() {
     if (authMode === 'login') {
         // LOGIN MODE
         if (!storedPass) {
-            setLoginError("Usuário não encontrado. Crie uma conta primeiro.");
+            setLoginError("USUARIO NAO ENCONTRADO.");
             return;
         }
         if (storedPass !== pass) {
-            setLoginError("Senha incorreta.");
+            setLoginError("SENHA INCORRETA.");
             return;
         }
         // Success Login
@@ -296,24 +379,24 @@ export default function App() {
     } else {
         // REGISTER MODE
         if (storedPass) {
-            setLoginError("Este nome de usuário já está registrado.");
+            setLoginError("USUARIO JA EXISTE.");
             return;
         }
         // DOUBLE CHECK: Check global registry just in case
         if (checkUserExists(user)) {
-            setLoginError("Este nome de jogador já está em uso no ranking.");
+            setLoginError("NOME JA USADO NO RANKING.");
             return;
         }
 
         try {
             localStorage.setItem(`leonardo_auth_${user}`, pass);
             // Register initial stats to global leaderboard
-            updateGlobalLeaderboard(user, INITIAL_STATE);
+            updateGlobalLeaderboards(user, INITIAL_STATE);
             
-            setLoginSuccess("Conta criada com sucesso! Você pode entrar agora.");
+            setLoginSuccess("CONTA CRIADA! ENTRE AGORA.");
             setAuthMode('login'); // Switch to login tab
         } catch (err) {
-            setLoginError("Erro ao salvar conta (Storage cheio?).");
+            setLoginError("ERRO DE STORAGE.");
         }
     }
   };
@@ -326,7 +409,6 @@ export default function App() {
       try {
         const parsedWrapper = JSON.parse(saved);
         
-        // --- SECURITY CHECK ---
         let finalState = INITIAL_STATE;
 
         // Check if it's the new secure format { data: ..., hash: ... }
@@ -334,13 +416,12 @@ export default function App() {
             const isValid = verifySaveHash(parsedWrapper.data, parsedWrapper.hash);
             if (!isValid) {
                 alert("ERRO DE SEGURANÇA:\n\nDetectamos alterações manuais no seu arquivo de save.\nPara garantir a justiça do Ranking Global, seu progresso foi resetado.");
-                // We do NOT load the corrupted state. We keep INITIAL_STATE.
                 setCheaterDetected(true);
             } else {
+                // Merge to ensure new fields (credits, playTime) are initialized
                 finalState = { ...INITIAL_STATE, ...parsedWrapper.data };
             }
         } 
-        // Backward compatibility for old saves (migrate them once)
         else if (parsedWrapper.money !== undefined) {
              finalState = { ...INITIAL_STATE, ...parsedWrapper };
         }
@@ -353,12 +434,10 @@ export default function App() {
       }
     } else {
       setGameState({ ...INITIAL_STATE, startTime: Date.now() });
-      updateGlobalLeaderboard(user, INITIAL_STATE);
+      updateGlobalLeaderboards(user, INITIAL_STATE);
     }
     
-    // Update local ranking view immediately on load
-    const storedLeaderboard = localStorage.getItem('leonardo_global_users');
-    if (storedLeaderboard) setLeaderboard(JSON.parse(storedLeaderboard));
+    refreshLocalLeaderboard(rankingMode);
   };
 
   const checkOfflineEarnings = (parsed: GameState) => {
@@ -374,6 +453,7 @@ export default function App() {
        if (product && level > 0) {
           let inc = product.baseRevenue * level * Math.pow(2, Math.floor(level/25));
           inc *= parsed.prestigeMultiplier;
+          inc *= (parsed.creditMultiplier || 1);
           offlineTotal += inc;
        }
     });
@@ -440,13 +520,28 @@ export default function App() {
           return;
       }
 
+      // Time Logic
+      const newPlayTime = (gameState.playTime || 0) + 1;
+      let newCredits = gameState.credits || 0;
+      let soundToPlay = null;
+
+      // Award Credit every 5 mins (300 seconds)
+      if (newPlayTime > 0 && newPlayTime % 300 === 0) {
+          newCredits += 1;
+          soundToPlay = 'coin';
+      }
+
       const eps = calculateTotalEPS();
       setGameState(prev => ({
         ...prev,
         money: prev.money + eps,
         lifetimeEarnings: prev.lifetimeEarnings + eps,
-        lastSaveTime: Date.now()
+        lastSaveTime: Date.now(),
+        playTime: newPlayTime,
+        credits: newCredits
       }));
+
+      if (soundToPlay) playSound('coin', gameState.soundEnabled);
 
       if (Math.random() < 0.05) setQuote(FUNNY_QUOTES[Math.floor(Math.random() * FUNNY_QUOTES.length)]);
     }, 1000);
@@ -457,7 +552,7 @@ export default function App() {
       clearInterval(interval);
       clearInterval(saveInterval);
     };
-  }, [calculateTotalEPS, username, cheaterDetected, gameState.money]);
+  }, [calculateTotalEPS, username, cheaterDetected, gameState.money, gameState.playTime]);
 
   // --- Actions ---
 
@@ -523,18 +618,34 @@ export default function App() {
     }
   };
 
+  const buyCreditItem = () => {
+      if (cheaterDetected) return;
+      const cost = 10;
+      if (gameState.credits >= cost) {
+          playSound('coin', gameState.soundEnabled);
+          setGameState(prev => ({
+              ...prev,
+              credits: prev.credits - cost,
+              creditMultiplier: (prev.creditMultiplier || 1) * 2
+          }));
+      }
+  };
+
   const handlePrestigeClick = () => {
       if (cheaterDetected) return;
       setShowPrestigeModal(true);
   };
 
   const confirmPrestige = () => {
-    const prestigeCurrency = gameState.lifetimeEarnings / 1000000;
-    if (prestigeCurrency < 1) return;
+    const nextIndex = gameState.prestigeLevel + 1;
+    // Check if next title exists and if we can afford it
+    if (nextIndex >= TITLES.length) return;
+    const nextTitleCost = TITLES[nextIndex].cost;
+
+    if (gameState.lifetimeEarnings < nextTitleCost) return;
     
     // New Calculation: 25% (0.25) per Prestige Level
-    const nextLevel = gameState.prestigeLevel + 1;
-    const newMultiplier = 1 + (nextLevel * PRESTIGE_BONUS_PER_LEVEL);
+    const newMultiplier = 1 + (nextIndex * PRESTIGE_BONUS_PER_LEVEL);
 
     // Manually construct new state to ensure deep reset
     const newState: GameState = {
@@ -545,9 +656,15 @@ export default function App() {
         productLevels: { balas: 1 }, // Explicit reset
         hiredStaff: {}, // Explicit reset
         purchasedUpgrades: {}, // Explicit reset
-        prestigeLevel: nextLevel,
+        prestigeLevel: nextIndex,
         prestigeMultiplier: newMultiplier,
-        redeemedCodes: gameState.redeemedCodes, // Keep redeemed codes
+        
+        // Preserve Credit Stats
+        credits: gameState.credits,
+        playTime: gameState.playTime,
+        creditMultiplier: gameState.creditMultiplier,
+        chatColor: gameState.chatColor, // Preserve Chat Color
+        
         soundEnabled: gameState.soundEnabled
     };
 
@@ -557,673 +674,660 @@ export default function App() {
         // Use manual save to ensure signature is applied immediately
         const hash = generateSaveHash(newState);
         localStorage.setItem(`leonardo_save_${usernameRef.current}`, JSON.stringify({ data: newState, hash }));
-        updateGlobalLeaderboard(usernameRef.current, newState);
+        updateGlobalLeaderboards(usernameRef.current, newState);
     }
     setShowPrestigeModal(false);
   };
 
   const toggleSound = () => setGameState(prev => ({...prev, soundEnabled: !prev.soundEnabled}));
 
-  // --- Code System ---
-
-  const handleRedeemCode = () => {
-    if (cheaterDetected) return;
-    const code = codeInput.trim().toUpperCase();
-    if (!code) return;
-
-    if (gameState.redeemedCodes.includes(code)) {
-        setCodeMessage({ type: 'error', text: 'Código já resgatado!' });
-        return;
-    }
-
-    // Check vs Server Codes
-    const foundCode = serverCodes.find(c => c.code === code);
-    
-    if (foundCode) {
-        // Check Expiration (1 minute)
-        const now = Date.now();
-        const expiresAt = foundCode.createdAt + CODE_EXPIRATION_MS;
-        
-        if (now > expiresAt) {
-            setCodeMessage({ type: 'error', text: 'Código expirado!' });
-            return;
-        }
-
-        let successText = "";
-        setGameState(prev => {
-            let newMoney = prev.money;
-            let newMult = prev.prestigeMultiplier;
-
-            if (foundCode.type === 'MONEY') {
-                newMoney += foundCode.value;
-                successText = `Resgatado: +$${formatMoney(foundCode.value)}`;
-            } else if (foundCode.type === 'MULTIPLIER') {
-                newMult += foundCode.value;
-                successText = `Resgatado: +${foundCode.value}x Multiplicador!`;
-            }
-
-            return {
-                ...prev,
-                money: newMoney,
-                prestigeMultiplier: newMult,
-                redeemedCodes: [...prev.redeemedCodes, code]
-            };
-        });
-        setCodeMessage({ type: 'success', text: successText });
-        playSound('upgrade', gameState.soundEnabled);
-        setCodeInput('');
-    } else {
-        setCodeMessage({ type: 'error', text: 'Código inválido.' });
-    }
-  };
-
   // --- Admin Logic ---
-
-  const handleCreateCode = () => {
-    if (!newCodeName) return;
-    const finalCode = newCodeName.trim().toUpperCase();
-    
-    if (serverCodes.find(c => c.code === finalCode)) {
-        alert("Código já existe!");
-        return;
-    }
-
-    const newCode: GameCode = {
-        code: finalCode,
-        type: newCodeType,
-        value: Number(newCodeValue),
-        createdBy: username || 'Admin',
-        createdAt: Date.now()
-    };
-
-    const updated = [...serverCodes, newCode];
-    saveServerCodes(updated);
-    alert(`Código ${finalCode} criado! Válido por 1 minuto.`);
-    setNewCodeName('');
-  };
-
-  const handleDeleteCode = (codeToDelete: string) => {
-    const updated = serverCodes.filter(c => c.code !== codeToDelete);
-    saveServerCodes(updated);
-  };
 
   const adminAddMoney = (amount: number) => {
     setGameState(prev => ({...prev, money: prev.money + amount}));
   };
+  
+  const adminAddCredits = (amount: number) => {
+    setGameState(prev => ({...prev, credits: (prev.credits || 0) + amount}));
+  };
 
-  // --- Auth Screen ---
+  // --- Helpers for Render ---
+  const currentTitle = TITLES[Math.min(gameState.prestigeLevel, TITLES.length - 1)].name;
+  const nextLevelIndex = gameState.prestigeLevel + 1;
+  const nextTitleInfo = nextLevelIndex < TITLES.length ? TITLES[nextLevelIndex] : null;
+  const eps = calculateTotalEPS();
+
+  // --- VISUAL RENDER START ---
+  
+  // Adjusted for Mobile Compactness
+  const containerClass = "min-h-screen bg-indigo-800 flex items-center justify-center p-0 md:p-6 pattern-dots overflow-hidden";
+  const boxClass = "bg-white w-full max-w-6xl retro-border shadow-[8px_8px_0px_0px_rgba(0,0,0,0.4)] z-10 relative flex flex-col h-screen md:h-[85vh] rounded-none md:rounded-lg";
+  const headerClass = "bg-yellow-400 p-2 md:p-4 border-b-4 border-black relative flex flex-wrap justify-between items-center gap-2";
+
+  // --- AUTH SCREEN ---
   if (!username) {
     return (
-      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-4">
-        <div className="bg-white rounded-2xl shadow-xl p-8 max-w-md w-full">
-           <div className="text-center mb-6">
-              <div className="text-6xl mb-2">📛</div>
-              <h1 className="text-3xl font-display font-bold text-blue-700">Leonardo do ABC</h1>
-              <p className="text-slate-500">O simulador de supermercado definitivo.</p>
+      <div className={containerClass}>
+        <div className="absolute inset-0 bg-gradient-to-br from-purple-900/50 to-blue-900/50 pointer-events-none"></div>
+
+        <div className="bg-white max-w-md w-full retro-border shadow-[8px_8px_0px_0px_rgba(0,0,0,0.4)] z-10 relative overflow-hidden m-4">
+           
+           <div className="bg-yellow-400 p-6 text-center border-b-4 border-black relative">
+              <div className="text-6xl mb-2 animate-bounce filter drop-shadow-md cursor-default hover:scale-110 transition-transform">👾</div>
+              <h1 className="text-2xl font-pixel text-blue-800 leading-tight drop-shadow-sm stroke-white tracking-tighter">
+                 LEONARDO DO ABC
+              </h1>
+              <div className="inline-block bg-red-500 text-white text-[10px] font-pixel px-2 py-1 mt-2 border-2 border-black transform -rotate-2">
+                8-BIT TYCOON
+              </div>
            </div>
 
-           {/* Auth Tabs */}
-           <div className="flex mb-6 bg-slate-100 rounded-lg p-1">
-              <button 
-                onClick={() => { setAuthMode('login'); setLoginError(null); setLoginSuccess(null); }}
-                className={`flex-1 py-2 rounded-md font-bold text-sm transition ${authMode === 'login' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                Entrar
-              </button>
-              <button 
-                onClick={() => { setAuthMode('register'); setLoginError(null); setLoginSuccess(null); }}
-                className={`flex-1 py-2 rounded-md font-bold text-sm transition ${authMode === 'register' ? 'bg-white text-blue-600 shadow-sm' : 'text-slate-500 hover:text-slate-700'}`}
-              >
-                Criar Conta
-              </button>
+           <div className="p-8 bg-white">
+               <div className="flex mb-8 border-4 border-black p-1 bg-gray-100">
+                  <button 
+                    onClick={() => { setAuthMode('login'); setLoginError(null); setLoginSuccess(null); }}
+                    className={`flex-1 py-2 font-bold text-sm font-pixel transition ${authMode === 'login' ? 'bg-blue-600 text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'}`}
+                  >
+                    LOGIN
+                  </button>
+                  <button 
+                    onClick={() => { setAuthMode('register'); setLoginError(null); setLoginSuccess(null); }}
+                    className={`flex-1 py-2 font-bold text-sm font-pixel transition ${authMode === 'register' ? 'bg-green-500 text-white' : 'text-gray-400 hover:text-gray-600 hover:bg-gray-200'}`}
+                  >
+                    REGISTRO
+                  </button>
+               </div>
+
+               <form onSubmit={handleAuth} className="space-y-6">
+                 <div>
+                   <label className="block text-xs font-bold text-black mb-2 font-pixel">
+                      <span className="bg-blue-100 px-2 py-1 border-2 border-black">JOGADOR</span>
+                   </label>
+                   <div className="relative">
+                     <div className="absolute left-0 top-0 bottom-0 w-12 bg-gray-200 border-r-4 border-black flex items-center justify-center">
+                        <User className="text-black" size={24} />
+                     </div>
+                     <input 
+                       type="text" 
+                       value={loginInput}
+                       onChange={(e) => setLoginInput(e.target.value)}
+                       className="w-full pl-16 pr-4 py-4 bg-white border-4 border-black focus:bg-blue-50 focus:outline-none font-pixel text-lg text-black placeholder-gray-400 uppercase"
+                       placeholder="USUARIO..."
+                     />
+                   </div>
+                 </div>
+                 
+                 <div>
+                   <label className="block text-xs font-bold text-black mb-2 font-pixel">
+                      <span className="bg-purple-100 px-2 py-1 border-2 border-black">SENHA</span>
+                   </label>
+                   <div className="relative">
+                     <div className="absolute left-0 top-0 bottom-0 w-12 bg-gray-200 border-r-4 border-black flex items-center justify-center">
+                        <Lock className="text-purple-600" size={24} />
+                     </div>
+                     <input 
+                       type="password" 
+                       value={passwordInput}
+                       onChange={(e) => setPasswordInput(e.target.value)}
+                       className="w-full pl-16 pr-4 py-4 bg-white border-4 border-black focus:bg-purple-50 focus:outline-none font-pixel text-lg text-purple-600 placeholder-gray-400"
+                       placeholder="****"
+                     />
+                   </div>
+                 </div>
+
+                 {loginError && (
+                    <div className="p-3 bg-red-100 text-red-600 text-xs border-4 border-red-500 font-pixel text-center">
+                       ⚠️ {loginError}
+                    </div>
+                 )}
+                 {loginSuccess && (
+                    <div className="p-3 bg-green-100 text-green-600 text-xs border-4 border-green-500 font-pixel text-center">
+                       ✅ {loginSuccess}
+                    </div>
+                 )}
+
+                 <button type="submit" className={`w-full text-white font-pixel py-4 retro-border active:translate-y-1 active:shadow-none transition-transform hover:-translate-y-1 shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] ${authMode === 'login' ? 'bg-blue-600 hover:bg-blue-500' : 'bg-green-500 hover:bg-green-400'}`}>
+                    {authMode === 'login' ? '▶ INICIAR' : '▶ CRIAR'}
+                 </button>
+               </form>
            </div>
-
-           <form onSubmit={handleAuth} className="space-y-4">
-             <div>
-               <label className="block text-sm font-bold text-slate-700 mb-1">Nome de Usuário</label>
-               <div className="relative">
-                 <User className="absolute left-3 top-3 text-slate-400" size={20} />
-                 <input 
-                   type="text" 
-                   value={loginInput}
-                   onChange={(e) => setLoginInput(e.target.value)}
-                   className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none"
-                   placeholder="Ex: leo123"
-                 />
-               </div>
-             </div>
-             
-             <div>
-               <label className="block text-sm font-bold text-slate-700 mb-1">Senha</label>
-               <div className="relative">
-                 <Lock className="absolute left-3 top-3 text-slate-400" size={20} />
-                 <input 
-                   type="password" 
-                   value={passwordInput}
-                   onChange={(e) => setPasswordInput(e.target.value)}
-                   className="w-full pl-10 pr-4 py-3 rounded-lg border border-slate-300 focus:border-blue-500 focus:ring-2 focus:ring-blue-200 outline-none"
-                   placeholder="********"
-                 />
-               </div>
-             </div>
-
-             {loginError && <div className="p-3 bg-red-50 text-red-600 text-sm rounded-lg font-medium">{loginError}</div>}
-             {loginSuccess && <div className="p-3 bg-green-50 text-green-600 text-sm rounded-lg font-medium">{loginSuccess}</div>}
-
-             <button type="submit" className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-lg shadow-lg flex items-center justify-center gap-2">
-                {authMode === 'login' ? <LogIn size={20} /> : <UserPlus size={20} />}
-                {authMode === 'login' ? 'Acessar Loja' : 'Registrar Usuário'}
-             </button>
-           </form>
         </div>
       </div>
     );
   }
 
-  // --- Main Game ---
-
-  const eps = calculateTotalEPS();
-  const currentTitle = TITLES[Math.min(gameState.prestigeLevel, TITLES.length - 1)];
-
+  // --- GAME SCREEN ---
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900 pb-20 md:pb-0 font-sans overflow-hidden flex flex-col">
+    <div className={containerClass}>
+      
       {cheaterDetected && (
-          <div className="fixed inset-0 z-[100] bg-red-900/95 flex items-center justify-center p-8 backdrop-blur text-white text-center">
-              <div>
+          <div className="fixed inset-0 z-[100] bg-red-900 flex items-center justify-center p-8 text-white text-center font-pixel">
+              <div className="retro-border bg-black p-8">
                   <AlertTriangle size={80} className="mx-auto mb-4 text-yellow-400 animate-pulse" />
-                  <h1 className="text-4xl font-bold font-display mb-4">Ação Suspeita Detectada</h1>
-                  <p className="text-xl mb-8">Valores impossíveis ou modificação de save detectada.</p>
-                  <button onClick={handleLogout} className="bg-white text-red-900 px-6 py-3 rounded font-bold hover:bg-slate-200">Reiniciar Jogo</button>
+                  <h1 className="text-2xl mb-4 text-red-500">HACK DETECTADO</h1>
+                  <button onClick={handleLogout} className="bg-white text-red-900 px-6 py-4 retro-border hover:bg-gray-200 uppercase">Reiniciar</button>
               </div>
           </div>
       )}
 
       {clicks.map(click => <FloatingText key={click.id} x={click.x} y={click.y} value={click.value} onComplete={() => setClicks(p => p.filter(c => c.id !== click.id))} />)}
 
-      {/* Offline Modal */}
       {offlineEarnings && !cheaterDetected && (
-        <div className="fixed inset-0 z-[60] bg-black/50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-xl shadow-2xl p-6 max-w-sm w-full animate-bounce-in text-center">
-            <h2 className="text-2xl font-display font-bold text-blue-600 mb-2">Bem-vindo de volta!</h2>
-            <p className="text-gray-600 mb-4">A loja faturou enquanto você dormia:</p>
-            <div className="text-4xl font-bold text-green-600 mb-6">${formatMoney(offlineEarnings)}</div>
-            <button onClick={() => setOfflineEarnings(null)} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 px-4 rounded-lg">Coletar</button>
+        <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4">
+          <div className="bg-white retro-border p-6 max-w-sm w-full text-center">
+            <h2 className="text-xl font-pixel text-blue-700 mb-4">VOCE VOLTOU!</h2>
+            <div className="text-4xl font-pixel text-green-600 mb-6">${formatMoney(offlineEarnings)}</div>
+            <button onClick={() => setOfflineEarnings(null)} className="w-full bg-green-500 hover:bg-green-400 text-white font-pixel py-3 retro-border retro-btn">COLETAR</button>
           </div>
         </div>
       )}
 
-      {/* Prestige Modal */}
-      {showPrestigeModal && (
-         <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4 backdrop-blur-sm">
-            <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full overflow-hidden animate-bounce-in">
-                <div className="bg-gradient-to-r from-purple-700 to-indigo-800 p-6 text-white text-center">
-                    <div className="inline-block p-3 bg-white/20 rounded-full mb-2 backdrop-blur-md">
-                         <ArrowUpCircle size={48} className="text-yellow-300" />
-                    </div>
-                    <h2 className="text-2xl font-display font-bold">Promoção de Cargo!</h2>
-                    <p className="text-indigo-200">Você foi notado pela diretoria.</p>
+      {showPrestigeModal && nextTitleInfo && (
+         <div className="fixed inset-0 z-[70] bg-black/80 flex items-center justify-center p-4">
+            <div className="bg-white retro-border max-w-md w-full">
+                <div className="bg-blue-800 p-6 text-white text-center border-b-4 border-black">
+                    <h2 className="text-xl font-pixel mt-2 text-yellow-300">PROMOÇÃO DISPONIVEL!</h2>
                 </div>
-                
                 <div className="p-6 space-y-4">
-                    <div className="bg-yellow-50 border-l-4 border-yellow-400 p-3 rounded text-sm text-yellow-800">
-                        <span className="font-bold block mb-1">⚠️ ATENÇÃO: REINÍCIO</span>
-                        Ao aceitar, seu Dinheiro, Produtos e Funcionários serão zerados. Você manterá apenas seus Códigos e ganhará um multiplicador permanente.
+                    <div className="bg-yellow-100 border-4 border-yellow-600 p-4 text-sm text-yellow-900 font-bold">
+                        <span className="font-pixel block mb-2 text-red-600">! ATENÇÃO: RESET !</span>
+                        Ao aceitar o cargo de <span className="text-black font-bold">{nextTitleInfo.name}</span>, você reseta seu dinheiro e produtos.
                     </div>
-
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="text-center p-3 bg-slate-50 rounded-lg">
-                            <p className="text-xs text-slate-500 font-bold uppercase">Bônus Atual</p>
-                            <p className="text-xl font-bold text-slate-400">x{gameState.prestigeMultiplier.toFixed(2)}</p>
-                        </div>
-                        <div className="text-center p-3 bg-green-50 rounded-lg border border-green-200">
-                            <p className="text-xs text-green-600 font-bold uppercase">Novo Bônus</p>
-                            <p className="text-xl font-bold text-green-600">
-                                x{(1 + (gameState.prestigeLevel + 1) * PRESTIGE_BONUS_PER_LEVEL).toFixed(2)}
-                            </p>
-                            <p className="text-[10px] text-green-600">(+{PRESTIGE_BONUS_PER_LEVEL * 100}%/Cargo)</p>
-                        </div>
-                    </div>
-
-                    <div className="flex gap-3 pt-2">
-                        <button 
-                            onClick={() => setShowPrestigeModal(false)}
-                            className="flex-1 py-3 px-4 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold rounded-xl flex items-center justify-center gap-2"
-                        >
-                            <XCircle size={18} /> Cancelar
-                        </button>
-                        <button 
-                            onClick={confirmPrestige}
-                            className="flex-1 py-3 px-4 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl flex items-center justify-center gap-2 shadow-lg shadow-purple-200"
-                        >
-                            <CheckCircle size={18} /> Aceitar
-                        </button>
+                    <div className="flex gap-4 pt-2">
+                        <button onClick={() => setShowPrestigeModal(false)} className="flex-1 py-4 bg-red-500 text-white font-pixel retro-border retro-btn text-xs">CANCELAR</button>
+                        <button onClick={confirmPrestige} className="flex-1 py-4 bg-green-500 text-white font-pixel retro-border retro-btn text-xs">ACEITAR</button>
                     </div>
                 </div>
             </div>
          </div>
       )}
 
-      {/* HEADER */}
-      <header className="bg-blue-600 text-white p-2 md:p-4 shadow-md z-10 sticky top-0">
-        <div className="max-w-6xl mx-auto flex justify-between items-center">
-          <div className="flex flex-col">
-            <h1 className="text-lg md:text-2xl font-display font-bold flex items-center gap-2">
-              <span className="text-xl md:text-2xl">📛</span> <span className="hidden md:inline">Leonardo do ABC</span>
-            </h1>
-            <span className="text-blue-200 text-xs font-medium flex items-center gap-1">
-               {username} {isAdmin && <span className="text-yellow-300 font-bold">[ADMIN]</span>} • {currentTitle}
-            </span>
-          </div>
-          
-          <div className="flex items-center gap-2 md:gap-4">
-            {/* RADIO COMPONENT (Shows smaller on mobile) */}
-            <div className="hidden md:block w-64">
-                <RadioSystem />
+      <div className={boxClass}>
+        {/* HEADER */}
+        <header className={headerClass}>
+            <div className="flex flex-col z-10 w-full md:w-auto">
+                <div className="flex justify-between items-center w-full md:justify-start gap-2">
+                    <h1 className="text-sm md:text-xl font-pixel text-blue-800 drop-shadow-sm stroke-white truncate">LEONARDO TYCOON</h1>
+                    <div className="md:hidden flex gap-2">
+                        <div className="bg-indigo-900 text-white px-2 py-1 border-2 border-black flex items-center gap-1">
+                            <Gem size={10} className="text-cyan-400" />
+                            <span className="font-pixel text-xs text-cyan-300">{gameState.credits}</span>
+                        </div>
+                    </div>
+                </div>
+                <div className="flex gap-2 items-center mt-1">
+                    <span className="text-[10px] md:text-xs font-mono font-bold bg-white border-2 border-black px-2 text-black truncate max-w-[100px]">
+                        {username}
+                    </span>
+                    <span className="text-[10px] md:text-xs font-pixel text-white bg-blue-600 border-2 border-black px-2">
+                        {currentTitle}
+                    </span>
+                    {isAdmin && <span className="text-[10px] bg-red-500 text-white border-2 border-black px-1 font-pixel">GM</span>}
+                </div>
             </div>
 
-            <div className="flex gap-2">
-                <button onClick={() => { saveGame(); alert('Jogo Salvo!'); }} className="p-2 hover:bg-blue-700 rounded-full transition" title="Salvar">
-                <Save size={20} />
-                </button>
-                <button onClick={toggleSound} className="p-2 hover:bg-blue-700 rounded-full transition">
-                {gameState.soundEnabled ? <Volume2 size={20} /> : <VolumeX size={20} />}
-                </button>
-                <button onClick={handleLogout} className="p-2 hover:bg-blue-700 rounded-full transition" title="Sair">
-                <LogOut size={20} />
-                </button>
+            {/* Global Stats Bar */}
+            <div className="flex items-center gap-1 md:gap-2 md:ml-auto z-10 w-full md:w-auto justify-between md:justify-end">
+                {/* Time */}
+                <div className="bg-indigo-900 text-white p-1 md:p-2 border-2 border-black flex items-center gap-2" title="Tempo Online">
+                    <Clock size={14} className="text-yellow-400" />
+                    <span className="font-mono text-xs md:text-sm">{formatTime(gameState.playTime || 0)}</span>
+                </div>
+
+                {/* Credits (Desktop) */}
+                <div className="hidden md:flex bg-indigo-900 text-white p-2 border-2 border-black items-center gap-2" title="Créditos VIP">
+                    <Gem size={16} className="text-cyan-400" />
+                    <span className="font-pixel text-sm text-cyan-300">{gameState.credits || 0}</span>
+                </div>
+
+                {/* Money */}
+                <div className="bg-black text-green-400 p-1 md:p-2 border-2 border-gray-500 min-w-[100px] md:min-w-[140px] text-right flex-1 md:flex-none">
+                    <div className="text-sm md:text-lg font-pixel">${formatMoney(gameState.money)}</div>
+                    <div className="text-[9px] md:text-[10px] text-gray-500 font-mono">+${formatMoney(eps)}/s</div>
+                </div>
             </div>
-            
-            <div className="text-right min-w-[80px]">
-              <div className="text-xl md:text-3xl font-bold font-display flex items-center justify-end gap-1">
-                <span className="text-green-300">$</span> {formatMoney(gameState.money)}
-              </div>
-              <div className="text-xs text-blue-200">+${formatMoney(eps)}/s</div>
-            </div>
-          </div>
+        </header>
+
+        {/* TICKER */}
+        <div className="bg-black text-yellow-300 py-1 px-4 text-[10px] md:text-sm font-mono border-b-4 border-black overflow-hidden whitespace-nowrap z-0">
+            <p className="animate-pulse uppercase">*** {quote} *** | NEXT CREDIT IN: {300 - ((gameState.playTime || 0) % 300)}s</p>
         </div>
-      </header>
 
-      {/* TICKER */}
-      <div className="bg-yellow-400 text-yellow-900 py-1 px-4 text-sm font-bold text-center overflow-hidden whitespace-nowrap shadow-sm z-0">
-        <p className="animate-pulse">{quote}</p>
-      </div>
-
-      {/* MAIN CONTENT */}
-      <main className="flex-1 overflow-hidden max-w-6xl mx-auto w-full flex flex-col md:flex-row">
-        
-        {/* LEFT: WORK & AVATAR */}
-        <section className="w-full md:w-1/3 p-4 flex flex-col items-center border-b md:border-b-0 md:border-r border-slate-200 bg-white md:bg-transparent overflow-y-auto">
-            {/* Mobile Radio */}
-            <div className="md:hidden w-full mb-4">
-                <RadioSystem />
-            </div>
-
-            <div className="mb-6 relative group cursor-pointer mt-4" onClick={handleWorkClick}>
-              <div className="absolute inset-0 bg-blue-400 rounded-full blur-2xl opacity-20 group-hover:opacity-40 transition-opacity duration-500"></div>
-              <div className="relative w-40 h-40 md:w-64 md:h-64 bg-gradient-to-br from-blue-500 to-blue-700 rounded-full flex items-center justify-center shadow-xl transform transition active:scale-95 hover:scale-105 border-4 border-white select-none">
-                <span className="text-7xl md:text-9xl filter drop-shadow-lg">
-                  {gameState.prestigeLevel === 0 ? '👷' : gameState.prestigeLevel < 3 ? '👔' : gameState.prestigeLevel < 6 ? '🕴️' : '🦁'}
-                </span>
-              </div>
-              <div className="absolute -bottom-4 left-1/2 transform -translate-x-1/2 bg-white px-4 py-1 rounded-full shadow-md border border-slate-100 whitespace-nowrap">
-                <span className="text-sm font-bold text-slate-600">Repor Estoque!</span>
-              </div>
-            </div>
-
-            <div className="bg-white p-3 rounded-lg shadow-sm border border-slate-200 text-center w-full max-w-xs">
-                <p className="text-slate-500 text-xs uppercase tracking-wider font-bold">Poder do Clique</p>
-                <p className="text-xl font-bold text-blue-600">${formatMoney(calculateClickPower())}</p>
-            </div>
-        </section>
-
-        {/* RIGHT: TABS & LISTS */}
-        <section className="w-full md:w-2/3 flex flex-col h-full bg-slate-50">
-          <div className="flex bg-white shadow-sm overflow-x-auto no-scrollbar">
-            {Object.values(Tab).map(tab => {
-               if (tab === Tab.ADMIN && !isAdmin) return null;
-               return (
-                <button 
-                  key={tab}
-                  onClick={() => setActiveTab(tab)}
-                  className={`flex-1 py-4 px-2 text-sm font-bold flex items-center justify-center gap-2 border-b-2 transition min-w-[90px] ${activeTab === tab ? 'border-blue-600 text-blue-600' : 'border-transparent text-slate-500 hover:bg-slate-50'}`}
-                >
-                  {tab === Tab.PRODUCTS && <ShoppingBasket size={18} />}
-                  {tab === Tab.STAFF && <Users size={18} />}
-                  {tab === Tab.UPGRADES && <TrendingUp size={18} />}
-                  {tab === Tab.PROFILE && <Trophy size={18} />}
-                  {tab === Tab.RANKING && <Globe size={18} />}
-                  {tab === Tab.ADMIN && <ShieldAlert size={18} className="text-red-500" />}
-                  <span className="hidden sm:inline">{tab}</span>
-                </button>
-              );
-            })}
-          </div>
-
-          {activeTab === Tab.PRODUCTS && (
-             <div className="p-2 bg-slate-100 flex justify-center gap-2 flex-wrap shadow-inner">
-                {[1, 10, 25, 50, 100, 'MAX'].map((amount) => (
-                  <button
-                    key={amount}
-                    onClick={() => setBuyAmount(amount as BuyAmount)}
-                    className={`px-3 py-1 rounded-md text-xs font-bold transition ${buyAmount === amount ? 'bg-blue-600 text-white shadow-md' : 'bg-white text-slate-600 hover:bg-slate-200'}`}
-                  >
-                    x{amount}
-                  </button>
-                ))}
-             </div>
-          )}
-
-          <div className="flex-1 overflow-y-auto p-4 space-y-4 pb-24 md:pb-4">
+        {/* CONTENT AREA - Mobile Compact Mode */}
+        <div className="flex-1 flex flex-col md:flex-row overflow-hidden bg-gray-100 relative">
             
-            {activeTab === Tab.PRODUCTS && (
-              <div className="space-y-3">
-                {INITIAL_PRODUCTS.map(product => {
-                  const level = gameState.productLevels[product.id] || 0;
-                  const isUnlocked = level > 0;
-                  const { count, cost } = calculateBulkCost(product, level, buyAmount, gameState.money);
-                  const canAfford = count > 0 && gameState.money >= cost;
-                  const isMax = buyAmount === 'MAX';
-                  const currentIncome = calculateProductIncome(product.id, level);
-                  const progress = (level % 25) / 25 * 100;
-                  
-                  return (
-                    <div key={product.id} className={`bg-white p-4 rounded-xl shadow-sm border-l-4 ${isUnlocked ? 'border-blue-500' : 'border-slate-300 bg-slate-100'}`}>
-                      <div className="flex items-center justify-between mb-2">
-                         <div className="flex items-center gap-4">
-                            <div className="text-3xl bg-slate-50 w-12 h-12 rounded-full flex items-center justify-center shadow-inner relative">
-                              {isUnlocked ? product.icon : '🔒'}
-                              {isUnlocked && <div className="absolute -top-1 -right-1 bg-green-500 text-white text-[10px] w-5 h-5 flex items-center justify-center rounded-full border border-white">{level}</div>}
-                            </div>
-                            <div>
-                              <h3 className={`font-bold ${isUnlocked ? 'text-slate-800' : 'text-slate-500'}`}>{product.name}</h3>
-                              {isUnlocked && <div className="text-xs text-slate-500 font-medium"><span className="text-green-600 font-bold">+${formatMoney(currentIncome)}/s</span></div>}
+            {/* LEFT: Work & Avatar (Compact on Mobile) */}
+            <aside className="w-full md:w-1/3 p-2 md:p-4 bg-gray-200 border-b-4 md:border-b-0 md:border-r-4 border-black flex flex-row md:flex-col items-center gap-2 md:gap-0 shrink-0 h-auto md:h-full overflow-visible md:overflow-y-auto z-20">
+                <div className="hidden md:block w-full mb-4">
+                    <RadioSystem />
+                </div>
+
+                {/* Mobile: Horizontal Layout | Desktop: Vertical */}
+                <div className="flex flex-row md:flex-col items-center gap-2 w-full justify-between md:justify-center">
+                    
+                    {/* Work Button */}
+                    <div className="cursor-pointer active:scale-95 transition-transform shrink-0" onClick={handleWorkClick}>
+                        <div className="relative w-16 h-16 md:w-40 md:h-40 bg-blue-500 retro-border flex items-center justify-center">
+                            <span className="text-2xl md:text-6xl drop-shadow-md grayscale-0">
+                            {gameState.prestigeLevel === 0 ? '👷' : gameState.prestigeLevel < 2 ? '👔' : gameState.prestigeLevel < 5 ? '🕴️' : '🦁'}
+                            </span>
+                            {/* Tap Indicator (Hidden on tiny screens) */}
+                            <div className="hidden md:block absolute -bottom-6 bg-white border-2 border-black px-4 py-1">
+                                <span className="text-xs font-pixel text-black">CLICK!</span>
                             </div>
                         </div>
+                    </div>
 
-                        {isUnlocked ? (
-                          <button 
-                            onClick={() => buyProduct(product)}
-                            disabled={!canAfford}
-                            className={`flex flex-col items-center justify-center px-4 py-2 rounded-lg font-bold text-sm min-w-[100px] transition ${canAfford ? 'bg-green-500 hover:bg-green-600 text-white shadow-md active:translate-y-0.5' : 'bg-slate-200 text-slate-400 cursor-not-allowed'}`}
-                          >
-                            <span className="text-xs font-normal opacity-90">{isMax ? `+${count}` : `+${buyAmount}`}</span>
-                            <span>${formatMoney(cost)}</span>
-                          </button>
-                        ) : (
-                          <button 
-                            onClick={() => unlockProduct(product)}
-                            disabled={gameState.money < product.unlockCost}
-                            className={`px-4 py-2 rounded-lg font-bold text-sm transition ${gameState.money >= product.unlockCost ? 'bg-blue-500 hover:bg-blue-600 text-white shadow-md' : 'bg-slate-300 text-slate-500 cursor-not-allowed'}`}
-                          >
-                            Liberar ${formatMoney(product.unlockCost)}
-                          </button>
-                        )}
-                      </div>
-                      {isUnlocked && (
-                        <div className="w-full bg-slate-100 h-1.5 rounded-full mt-2 overflow-hidden flex items-center relative">
-                          <div className="bg-yellow-400 h-full transition-all duration-300" style={{ width: `${level % 25 === 0 && level > 0 ? 100 : progress}%` }}></div>
-                          {level % 25 === 0 && level > 0 && <span className="absolute right-0 text-[8px] font-bold text-yellow-600 bg-yellow-100 px-1 rounded-full">2x BÔNUS</span>}
+                    {/* Stats Compact */}
+                    <div className="flex flex-col flex-1 gap-1">
+                        <div className="bg-white p-1 md:p-4 retro-border text-center w-full shadow-md">
+                            <p className="text-gray-500 text-[9px] md:text-xs font-pixel mb-1">PODER DE CLIQUE</p>
+                            <p className="text-sm md:text-xl font-pixel text-blue-700 border-t-2 border-black pt-1 md:pt-2">${formatMoney(calculateClickPower())}</p>
                         </div>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {activeTab === Tab.STAFF && (
-              <div className="space-y-3">
-                {AVAILABLE_STAFF.map(staff => {
-                  const hired = gameState.hiredStaff[staff.id];
-                  const canAfford = gameState.money >= staff.baseCost;
-                  return (
-                    <div key={staff.id} className={`bg-white p-4 rounded-xl shadow-sm border ${hired ? 'border-green-400 bg-green-50' : 'border-slate-200'}`}>
-                      <div className="flex justify-between items-start">
-                        <div className="flex gap-3">
-                          <div className="bg-orange-100 text-orange-600 p-2 rounded-lg h-fit"><Briefcase size={20} /></div>
-                          <div>
-                            <h3 className="font-bold text-slate-800">{staff.role}: {staff.name}</h3>
-                            <p className="text-xs text-slate-500 mt-1 max-w-[200px]">{staff.description}</p>
-                          </div>
+                        {/* Mobile Actions */}
+                        <div className="flex md:hidden gap-1">
+                             <button onClick={() => { saveGame(); alert('SALVO!'); }} className="flex-1 p-1 bg-white border-2 border-black text-[9px] font-pixel">SALVAR</button>
+                             <button onClick={handleLogout} className="flex-1 p-1 bg-red-500 text-white border-2 border-black text-[9px] font-pixel">SAIR</button>
                         </div>
-                        {hired ? (
-                          <span className="bg-green-200 text-green-800 text-xs px-2 py-1 rounded font-bold uppercase">Contratado</span>
-                        ) : (
-                          <button onClick={() => hireStaff(staff)} disabled={!canAfford} className={`px-3 py-2 rounded-lg font-bold text-sm min-w-[80px] ${canAfford ? 'bg-orange-500 hover:bg-orange-600 text-white' : 'bg-slate-200 text-slate-400'}`}>${formatMoney(staff.baseCost)}</button>
-                        )}
-                      </div>
                     </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {activeTab === Tab.UPGRADES && (
-              <div className="space-y-3">
-                {UPGRADES.map(upgrade => {
-                  const bought = gameState.purchasedUpgrades[upgrade.id];
-                  const canAfford = gameState.money >= upgrade.cost;
-                  if (upgrade.triggerId && (gameState.productLevels[upgrade.triggerId] || 0) === 0) return null;
-                  if (bought) return null;
-                  return (
-                    <div key={upgrade.id} className="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex justify-between items-center">
-                      <div className="flex gap-3 items-center">
-                         <div className="bg-purple-100 text-purple-600 p-2 rounded-lg"><Zap size={20} /></div>
-                        <div>
-                          <h3 className="font-bold text-slate-800">{upgrade.name}</h3>
-                          <p className="text-xs text-slate-500">{upgrade.description}</p>
-                        </div>
-                      </div>
-                      <button onClick={() => buyUpgrade(upgrade)} disabled={!canAfford} className={`px-3 py-2 rounded-lg font-bold text-sm ${canAfford ? 'bg-purple-600 hover:bg-purple-700 text-white' : 'bg-slate-200 text-slate-400'}`}>${formatMoney(upgrade.cost)}</button>
-                    </div>
-                  );
-                })}
-              </div>
-            )}
-
-            {activeTab === Tab.PROFILE && (
-              <div className="space-y-6 text-center pt-4">
-                <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                  <div className="text-4xl mb-2">🏆</div>
-                  <h2 className="text-2xl font-display font-bold text-slate-800">{currentTitle}</h2>
-                  <p className="text-slate-500 text-sm mt-1">Conta: {username}</p>
-                  <div className="grid grid-cols-2 gap-4 mt-6">
-                    <div className="bg-slate-50 p-3 rounded-lg">
-                      <div className="text-xs text-slate-500 uppercase font-bold">Ganho Vitalício</div>
-                      <div className="text-lg font-bold text-slate-800">${formatMoney(gameState.lifetimeEarnings)}</div>
-                    </div>
-                    <div className="bg-slate-50 p-3 rounded-lg">
-                      <div className="text-xs text-slate-500 uppercase font-bold">Mult. Prestígio</div>
-                      <div className="text-lg font-bold text-purple-600">x{gameState.prestigeMultiplier.toFixed(2)}</div>
-                    </div>
-                  </div>
-                  <button onClick={() => { saveGame(); alert("Jogo salvo com sucesso!"); }} className="mt-4 w-full border border-blue-600 text-blue-600 font-bold py-2 rounded hover:bg-blue-50">Salvar Progresso Agora</button>
                 </div>
 
-                {/* Redeem Code */}
-                <div className="bg-white p-4 rounded-2xl shadow-sm border border-slate-200">
-                  <h3 className="font-bold text-slate-700 flex items-center justify-center gap-2 mb-2">
-                    <Ticket size={16} /> Resgatar Código
-                  </h3>
-                  <div className="flex gap-2">
-                    <input 
-                      type="text" 
-                      placeholder="Insira o código..." 
-                      className="flex-1 border border-slate-300 rounded px-3 py-2 text-sm uppercase"
-                      value={codeInput}
-                      onChange={(e) => setCodeInput(e.target.value)}
-                    />
-                    <button onClick={handleRedeemCode} className="bg-slate-800 text-white px-4 py-2 rounded font-bold text-sm hover:bg-slate-900">OK</button>
-                  </div>
-                  {codeMessage && (
-                    <div className={`mt-2 text-xs font-bold ${codeMessage.type === 'success' ? 'text-green-600' : 'text-red-500'}`}>
-                        {codeMessage.text}
-                    </div>
-                  )}
+                {/* Desktop Actions */}
+                <div className="hidden md:grid grid-cols-3 gap-2 w-full max-w-xs mt-4">
+                    <button onClick={() => { saveGame(); alert('JOGO SALVO!'); }} className="p-2 bg-white hover:bg-gray-100 border-2 border-black retro-btn flex justify-center"><Save size={16} /></button>
+                    <button onClick={toggleSound} className="p-2 bg-white hover:bg-gray-100 border-2 border-black retro-btn flex justify-center">{gameState.soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}</button>
+                    <button onClick={handleLogout} className="p-2 bg-red-500 hover:bg-red-400 text-white border-2 border-black retro-btn flex justify-center"><LogOut size={16} /></button>
+                </div>
+            </aside>
+
+            {/* RIGHT: Main Tabs */}
+            <main className="w-full md:w-2/3 flex flex-col h-full overflow-hidden">
+                {/* Tab Navigation - Horizontal Scroll */}
+                <div className="flex bg-gray-300 border-b-4 border-black overflow-x-auto no-scrollbar p-1 gap-1 shrink-0">
+                    {Object.values(Tab).map(tab => {
+                        if (tab === Tab.ADMIN && !isAdmin) return null;
+                        const isActive = activeTab === tab;
+                        let icon = <ShoppingBasket size={14} />;
+                        if (tab === Tab.STAFF) icon = <Users size={14} />;
+                        if (tab === Tab.UPGRADES) icon = <TrendingUp size={14} />;
+                        if (tab === Tab.CREDITS) icon = <Gem size={14} className="text-cyan-600" />;
+                        if (tab === Tab.PROFILE) icon = <Trophy size={14} />;
+                        if (tab === Tab.RANKING) icon = <Globe size={14} />;
+                        if (tab === Tab.CHAT) icon = <MessageSquare size={14} className="text-pink-600" />;
+                        if (tab === Tab.ADMIN) icon = <ShieldAlert size={14} className="text-red-500" />;
+
+                        return (
+                            <button 
+                            key={tab}
+                            onClick={() => setActiveTab(tab)}
+                            className={`flex-1 py-2 md:py-3 px-2 text-[10px] md:text-xs font-pixel flex items-center justify-center gap-1 md:gap-2 border-2 border-black transition min-w-[70px] md:min-w-[80px] ${isActive ? 'bg-indigo-600 text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] -translate-y-1' : 'bg-white text-gray-500 hover:bg-gray-100'}`}
+                            >
+                            {icon}
+                            <span className={tab === Tab.CHAT ? "inline" : "hidden sm:inline"}>{tab}</span>
+                            </button>
+                        );
+                    })}
                 </div>
 
-                <div className="bg-gradient-to-br from-indigo-600 to-purple-700 p-6 rounded-2xl shadow-lg text-white">
-                  <h3 className="text-xl font-bold font-display mb-2 flex items-center justify-center gap-2"><ArrowUpCircle /> Promoção de Cargo</h3>
-                  <p className="text-indigo-100 text-sm mb-4">Resete seu progresso atual para ganhar um multiplicador permanente baseado no seu Ganho Vitalício.</p>
-                  
-                  {gameState.lifetimeEarnings >= 1000000 ? (
-                    <button onClick={handlePrestigeClick} className="w-full bg-white text-indigo-700 font-bold py-3 rounded-lg hover:bg-indigo-50 transition shadow-lg active:scale-95 animate-pulse">
-                        Verificar Promoção
-                    </button>
-                  ) : (
-                    <div className="bg-black/20 p-3 rounded-lg text-sm font-medium">
-                      Requer $1M em Ganhos Vitalícios.
-                      <div className="w-full bg-black/30 h-2 rounded-full mt-2 overflow-hidden">
-                        <div className="bg-green-400 h-full transition-all duration-500" style={{ width: `${Math.min(100, (gameState.lifetimeEarnings / 1000000) * 100)}%` }}></div>
-                      </div>
-                      <div className="mt-1 text-xs opacity-75">${formatMoney(gameState.lifetimeEarnings)} / $1M</div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            )}
-            
-            {/* RANKING TAB */}
-            {activeTab === Tab.RANKING && (
-               <div className="space-y-4 pt-2">
-                 <div className="bg-white p-6 rounded-2xl shadow-sm border border-slate-200">
-                    <div className="text-center mb-6">
-                        <div className="inline-block p-3 bg-yellow-100 rounded-full mb-2">
-                            <Globe className="text-yellow-600" size={32} />
-                        </div>
-                        <h2 className="text-2xl font-display font-bold text-slate-800">Ranking Global</h2>
-                        <p className="text-slate-500">Os maiores magnatas do varejo</p>
-                    </div>
+                {/* Content */}
+                <div className="flex-1 overflow-y-auto p-2 md:p-4 space-y-4 bg-gray-100 w-full pb-20 md:pb-4">
+                    
+                    {/* --- LOJA --- */}
+                    {activeTab === Tab.PRODUCTS && (
+                        <>
+                            <div className="flex justify-center gap-2 flex-wrap mb-4">
+                                {[1, 10, 25, 50, 100, 'MAX'].map((amount) => (
+                                <button
+                                    key={amount}
+                                    onClick={() => setBuyAmount(amount as BuyAmount)}
+                                    className={`px-3 py-1 text-[10px] font-pixel border-2 border-black ${buyAmount === amount ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-200'}`}
+                                >
+                                    x{amount}
+                                </button>
+                                ))}
+                            </div>
+                            <div className="space-y-2 md:space-y-4">
+                                {INITIAL_PRODUCTS.map(product => {
+                                    const level = gameState.productLevels[product.id] || 0;
+                                    const isUnlocked = level > 0;
+                                    const { count, cost } = calculateBulkCost(product, level, buyAmount, gameState.money);
+                                    const canAfford = count > 0 && gameState.money >= cost;
+                                    const currentIncome = calculateProductIncome(product.id, level);
 
-                    <div className="overflow-hidden rounded-lg border border-slate-200">
-                        <table className="w-full text-sm text-left">
-                            <thead className="bg-slate-50 text-slate-500 uppercase font-bold text-xs">
-                                <tr>
-                                    <th className="px-4 py-3 text-center">#</th>
-                                    <th className="px-4 py-3">Jogador</th>
-                                    <th className="px-4 py-3 text-right">Patrimônio (Total)</th>
-                                </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100">
-                                {leaderboard.slice(0, 10).map((player, index) => {
-                                    const isMe = player.username === username;
-                                    let rankIcon = <span className="font-bold text-slate-500">#{index + 1}</span>;
-                                    let rowClass = "bg-white hover:bg-slate-50";
-
-                                    if (index === 0) {
-                                        rankIcon = <span className="text-2xl">🥇</span>;
-                                        rowClass = "bg-yellow-50/50 hover:bg-yellow-50";
-                                    } else if (index === 1) {
-                                        rankIcon = <span className="text-2xl">🥈</span>;
-                                    } else if (index === 2) {
-                                        rankIcon = <span className="text-2xl">🥉</span>;
+                                    // Gating
+                                    const reqPrestige = product.reqPrestige || 0;
+                                    if (gameState.prestigeLevel < reqPrestige) {
+                                        return (
+                                            <div key={product.id} className="p-2 md:p-4 retro-border bg-gray-300 opacity-60 relative overflow-hidden grayscale">
+                                                <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/10">
+                                                    <Lock size={24} className="text-gray-600 mb-1" />
+                                                    <span className="font-pixel text-[10px] text-red-600 bg-white border-2 border-black px-2 py-1">REQ: {TITLES[reqPrestige].name}</span>
+                                                </div>
+                                                <div className="flex items-center gap-4 blur-sm"><div className="w-12 h-12 bg-white border-2 border-black"></div><div className="h-4 w-32 bg-gray-400"></div></div>
+                                            </div>
+                                        )
                                     }
 
                                     return (
-                                        <tr key={index} className={`${rowClass} ${isMe ? 'bg-blue-50 border-l-4 border-blue-500' : ''}`}>
-                                            <td className="px-4 py-3 text-center w-16">{rankIcon}</td>
-                                            <td className="px-4 py-3">
-                                                <div className="font-bold text-slate-800 flex items-center gap-2">
-                                                    {player.username}
-                                                    {isMe && <span className="text-[10px] bg-blue-100 text-blue-600 px-1.5 py-0.5 rounded font-bold uppercase">Eu</span>}
+                                        <div key={product.id} className={`p-2 md:p-4 retro-border relative ${isUnlocked ? 'bg-white' : 'bg-yellow-50'}`}>
+                                            <div className="flex items-center justify-between mb-2">
+                                                <div className="flex items-center gap-2 md:gap-4">
+                                                    <div className="text-2xl md:text-3xl bg-white w-10 h-10 md:w-14 md:h-14 border-2 border-black flex items-center justify-center relative">
+                                                        {isUnlocked ? product.icon : '🔒'}
+                                                        {isUnlocked && <div className="absolute -top-2 -right-2 bg-blue-600 text-white text-[9px] md:text-[10px] px-1 md:px-2 py-0 font-pixel border border-black">{level}</div>}
+                                                    </div>
+                                                    <div>
+                                                        <h3 className={`font-pixel text-[10px] md:text-sm ${isUnlocked ? 'text-black' : 'text-gray-600'}`}>{product.name}</h3>
+                                                        {isUnlocked && <div className="text-xs md:text-lg text-green-700 font-bold font-mono">+${formatMoney(currentIncome)}/s</div>}
+                                                    </div>
                                                 </div>
-                                                <div className="text-xs text-slate-500 flex items-center gap-1">
-                                                    <Medal size={12} className="text-orange-400" /> {player.title}
+
+                                                {isUnlocked ? (
+                                                    <button onClick={() => buyProduct(product)} disabled={!canAfford} className={`flex flex-col items-center justify-center px-2 md:px-4 py-2 border-2 border-black min-w-[70px] md:min-w-[90px] retro-btn ${canAfford ? 'bg-orange-500 text-white hover:bg-orange-400' : 'bg-gray-300 text-gray-500'}`}>
+                                                        <span className="text-[9px] md:text-[10px] font-pixel mb-1">{buyAmount === 'MAX' ? `+${count}` : `+${buyAmount}`}</span>
+                                                        <span className="font-bold text-[10px] md:text-xs font-pixel">${formatMoney(cost)}</span>
+                                                    </button>
+                                                ) : (
+                                                    <button onClick={() => unlockProduct(product)} disabled={gameState.money < product.unlockCost} className={`px-2 md:px-4 py-2 border-2 border-black font-pixel text-[10px] md:text-xs retro-btn ${gameState.money >= product.unlockCost ? 'bg-green-500 text-white hover:bg-green-400' : 'bg-gray-500 text-gray-300'}`}>
+                                                        LIBERAR<br/>${formatMoney(product.unlockCost)}
+                                                    </button>
+                                                )}
+                                            </div>
+                                            {isUnlocked && (
+                                                <div className="mt-1 md:mt-2 w-full h-2 border-2 border-black bg-gray-200 relative">
+                                                    <div className="h-full bg-yellow-400" style={{ width: `${(level % 25) / 25 * 100}%` }}></div>
                                                 </div>
-                                            </td>
-                                            <td className="px-4 py-3 text-right font-mono font-bold text-green-600">
-                                                ${formatMoney(player.lifetimeEarnings)}
-                                            </td>
-                                        </tr>
-                                    );
-                                })}
-                            </tbody>
-                        </table>
-                    </div>
-                    {leaderboard.length === 0 && (
-                        <div className="text-center p-4 text-slate-500 italic">Carregando ranking...</div>
-                    )}
-                 </div>
-               </div>
-            )}
-
-            {/* ADMIN TAB */}
-            {activeTab === Tab.ADMIN && isAdmin && (
-                <div className="space-y-6 pt-2">
-                    <div className="bg-slate-900 text-white p-6 rounded-2xl shadow-lg border border-red-500">
-                        <div className="flex items-center gap-2 mb-4 border-b border-slate-700 pb-2">
-                            <ShieldAlert className="text-red-500" />
-                            <h2 className="text-xl font-bold font-display">Painel de Administrador</h2>
-                        </div>
-                        
-                        {/* Cheats */}
-                        <div className="mb-6">
-                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase">Trapaças Rápidas</h3>
-                            <div className="flex gap-2 flex-wrap">
-                                <button onClick={() => adminAddMoney(1000000)} className="px-3 py-1 bg-green-700 hover:bg-green-600 rounded text-xs font-bold">+ $1M</button>
-                                <button onClick={() => adminAddMoney(1000000000)} className="px-3 py-1 bg-green-700 hover:bg-green-600 rounded text-xs font-bold">+ $1B</button>
-                                <button onClick={() => setGameState(prev => ({...prev, prestigeLevel: prev.prestigeLevel + 1}))} className="px-3 py-1 bg-blue-700 hover:bg-blue-600 rounded text-xs font-bold">+1 Cargo</button>
-                                <button onClick={() => setGameState(prev => ({...prev, redeemedCodes: []}))} className="px-3 py-1 bg-yellow-700 hover:bg-yellow-600 rounded text-xs font-bold">Resetar Códigos</button>
-                            </div>
-                        </div>
-
-                        {/* Code Generator */}
-                        <div className="bg-slate-800 p-4 rounded-lg">
-                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase flex items-center gap-2"><Ticket size={14} /> Gerador de Códigos Globais (1 Min Validade)</h3>
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
-                                <div>
-                                    <label className="text-xs text-slate-500 block mb-1">Nome do Código</label>
-                                    <input value={newCodeName} onChange={e => setNewCodeName(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-white" placeholder="EX: DINHEIRO10" />
-                                </div>
-                                <div>
-                                    <label className="text-xs text-slate-500 block mb-1">Valor</label>
-                                    <input type="number" value={newCodeValue} onChange={e => setNewCodeValue(Number(e.target.value))} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-white" />
-                                </div>
-                                <div>
-                                    <label className="text-xs text-slate-500 block mb-1">Tipo de Prêmio</label>
-                                    <select value={newCodeType} onChange={(e: any) => setNewCodeType(e.target.value)} className="w-full bg-slate-900 border border-slate-700 rounded px-2 py-1 text-sm text-white">
-                                        <option value="MONEY">Dinheiro ($)</option>
-                                        <option value="MULTIPLIER">Multiplicador (x)</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <button onClick={handleCreateCode} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 rounded flex items-center justify-center gap-2 text-sm">
-                                <PlusCircle size={16} /> Criar e Salvar Código
-                            </button>
-                        </div>
-
-                        {/* List Codes */}
-                        <div className="mt-6">
-                            <h3 className="text-sm font-bold text-slate-400 mb-2 uppercase">Códigos Gerados ({serverCodes.length})</h3>
-                            <div className="space-y-2">
-                                {serverCodes.length === 0 && <p className="text-xs text-slate-600 italic">Nenhum código gerado.</p>}
-                                {serverCodes.map((code, idx) => {
-                                    const timeLeft = Math.max(0, Math.ceil((code.createdAt + CODE_EXPIRATION_MS - Date.now()) / 1000));
-                                    const isExpired = timeLeft === 0;
-
-                                    return (
-                                        <div key={idx} className={`bg-slate-800 p-2 rounded border flex justify-between items-center ${isExpired ? 'border-red-900 opacity-50' : 'border-green-700'}`}>
-                                            <div>
-                                                <span className="font-bold text-yellow-400">{code.code}</span>
-                                                <span className="text-xs text-slate-400 ml-2">({code.type === 'MONEY' ? '$' : 'x'}{code.value})</span>
-                                            </div>
-                                            <div className="flex items-center gap-3">
-                                                <span className={`text-xs font-mono flex items-center gap-1 ${isExpired ? 'text-red-500' : 'text-green-400'}`}>
-                                                    <Clock size={12} /> {timeLeft}s
-                                                </span>
-                                                <button onClick={() => handleDeleteCode(code.code)} className="text-slate-500 hover:text-red-500"><Trash2 size={14} /></button>
-                                            </div>
+                                            )}
                                         </div>
                                     );
                                 })}
                             </div>
+                        </>
+                    )}
+
+                    {/* --- EQUIPE --- */}
+                    {activeTab === Tab.STAFF && (
+                        <div className="space-y-2 md:space-y-4">
+                             {AVAILABLE_STAFF.map(staff => {
+                                const hired = gameState.hiredStaff[staff.id];
+                                const canAfford = gameState.money >= staff.baseCost;
+                                return (
+                                    <div key={staff.id} className={`p-2 md:p-4 retro-border bg-white relative ${hired ? 'bg-green-100' : ''}`}>
+                                        <div className="flex justify-between items-start">
+                                            <div className="flex gap-3">
+                                                <div className="bg-blue-200 border-2 border-black text-blue-800 p-2 h-fit hidden md:block"><Briefcase size={20} /></div>
+                                                <div>
+                                                    <h3 className="font-pixel text-xs text-black mb-1">{staff.name}</h3>
+                                                    <p className="text-[10px] text-gray-600 font-bold uppercase">{staff.role}</p>
+                                                    <p className="text-xs text-gray-800 mt-2 font-mono">"{staff.description}"</p>
+                                                </div>
+                                            </div>
+                                            {hired ? (
+                                                <div className="bg-green-500 border-2 border-black text-white text-[10px] px-2 py-1 font-pixel transform rotate-3">OK</div>
+                                            ) : (
+                                                <button onClick={() => hireStaff(staff)} disabled={!canAfford} className={`px-2 py-2 border-2 border-black font-pixel text-[10px] retro-btn ${canAfford ? 'bg-orange-500 text-white hover:bg-orange-400' : 'bg-gray-300 text-gray-500'}`}>${formatMoney(staff.baseCost)}</button>
+                                            )}
+                                        </div>
+                                    </div>
+                                );
+                             })}
                         </div>
-                    </div>
+                    )}
+                    
+                    {/* --- CHAT GLOBAL --- */}
+                    {activeTab === Tab.CHAT && (
+                        <div className="flex flex-col h-full retro-border bg-white relative">
+                            <div className="bg-pink-600 text-white p-2 border-b-2 border-black text-center font-pixel text-xs flex justify-between items-center">
+                                <span>CHAT GLOBAL</span>
+                                <div className="flex items-center gap-1">
+                                    <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse"></div>
+                                    <span className="text-[10px]">LIVE</span>
+                                </div>
+                            </div>
+                            
+                            {/* Color Selector */}
+                            <div className="bg-gray-200 border-b-2 border-black p-2 flex items-center gap-2 overflow-x-auto no-scrollbar">
+                                <span className="text-[10px] font-pixel text-black shrink-0">COR:</span>
+                                {CHAT_COLORS.map(color => (
+                                    <button
+                                        key={color}
+                                        onClick={() => changeChatColor(color)}
+                                        style={{ backgroundColor: color }}
+                                        className={`w-5 h-5 border-2 ${gameState.chatColor === color ? 'border-white ring-2 ring-black scale-110' : 'border-black hover:scale-110'} transition-transform shrink-0`}
+                                        title="Mudar cor do texto"
+                                    />
+                                ))}
+                            </div>
+                            
+                            {/* Message List */}
+                            <div className="flex-1 overflow-y-auto p-2 space-y-2 bg-gray-50 min-h-[300px]">
+                                {chatMessages.map((msg) => {
+                                    const isMe = msg.username === username;
+                                    const isSystem = msg.isSystem;
+                                    return (
+                                        <div key={msg.id} className={`flex flex-col ${isMe ? 'items-end' : 'items-start'}`}>
+                                            <div className={`max-w-[85%] border-2 border-black p-2 ${isMe ? 'bg-blue-100' : isSystem ? 'bg-yellow-100' : 'bg-white'}`}>
+                                                <div className="flex items-baseline gap-2 mb-1">
+                                                    <span className={`font-pixel text-[10px] ${isMe ? 'text-blue-700' : 'text-red-700'}`}>{msg.username}</span>
+                                                    {!isSystem && <span className="text-[9px] bg-gray-200 border border-gray-400 px-1 text-gray-600 rounded-sm">{msg.title}</span>}
+                                                </div>
+                                                <p className="font-mono text-xs break-words font-bold" style={{ color: msg.color || '#000000' }}>{msg.text}</p>
+                                            </div>
+                                            <span className="text-[9px] text-gray-400 mt-1 px-1">
+                                                {new Date(msg.timestamp).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit'})}
+                                            </span>
+                                        </div>
+                                    );
+                                })}
+                                <div ref={chatEndRef} />
+                            </div>
+
+                            {/* Input Area */}
+                            <form onSubmit={handleSendMessage} className="p-2 bg-gray-200 border-t-2 border-black flex gap-2">
+                                <input 
+                                    type="text" 
+                                    value={chatInput}
+                                    onChange={(e) => setChatInput(e.target.value)}
+                                    maxLength={100}
+                                    placeholder="Digite aqui..."
+                                    className="flex-1 border-2 border-black p-2 font-mono text-sm focus:outline-none"
+                                />
+                                <button type="submit" className="bg-blue-600 text-white p-2 border-2 border-black active:translate-y-1">
+                                    <Send size={16} />
+                                </button>
+                            </form>
+                        </div>
+                    )}
+                    
+                    {/* --- VIP SHOP (CREDITS) --- */}
+                    {activeTab === Tab.CREDITS && (
+                        <div className="space-y-4">
+                            <div className="bg-indigo-900 text-white p-4 retro-border text-center">
+                                <h2 className="text-xl font-pixel text-yellow-300 mb-2">LOJA VIP</h2>
+                                <p className="text-sm font-mono mb-4">GANHE 1 CRÉDITO A CADA 5 MIN ONLINE.</p>
+                                <div className="inline-block bg-black border-2 border-cyan-400 px-4 py-2 text-cyan-400 font-pixel text-lg">
+                                    💎 {gameState.credits} CRÉDITOS
+                                </div>
+                            </div>
+
+                            {/* Item: Multiplier */}
+                            <div className="bg-white p-4 retro-border flex flex-col md:flex-row items-center gap-4">
+                                <div className="bg-yellow-200 border-2 border-black p-4 hidden md:block">
+                                    <Coins size={32} className="text-yellow-700" />
+                                </div>
+                                <div className="flex-1 text-center md:text-left">
+                                    <h3 className="font-pixel text-sm text-black">MULTIPLICADOR DE LUCRO x2</h3>
+                                    <p className="text-xs font-mono text-gray-600 mt-1">Dobra TODO o seu lucro permanentemente. Acumula!</p>
+                                    <p className="text-xs font-bold text-purple-600 mt-1">Atual: x{(gameState.creditMultiplier || 1)}</p>
+                                </div>
+                                <button 
+                                    onClick={buyCreditItem} 
+                                    disabled={gameState.credits < 10}
+                                    className={`px-4 py-3 border-2 border-black font-pixel text-xs retro-btn ${gameState.credits >= 10 ? 'bg-green-500 text-white hover:bg-green-400' : 'bg-gray-300 text-gray-500'}`}
+                                >
+                                    COMPRAR<br/>💎 10
+                                </button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- RANKING --- */}
+                    {activeTab === Tab.RANKING && (
+                        <div className="space-y-4">
+                            <div className="flex gap-2 justify-center mb-4">
+                                <button 
+                                    onClick={() => setRankingMode('MONEY')}
+                                    className={`px-4 py-2 font-pixel text-[10px] md:text-xs border-2 border-black ${rankingMode === 'MONEY' ? 'bg-green-500 text-white' : 'bg-white text-gray-600'}`}
+                                >
+                                    MAGNATAS ($$$)
+                                </button>
+                                <button 
+                                    onClick={() => setRankingMode('TIME')}
+                                    className={`px-4 py-2 font-pixel text-[10px] md:text-xs border-2 border-black ${rankingMode === 'TIME' ? 'bg-indigo-500 text-white' : 'bg-white text-gray-600'}`}
+                                >
+                                    VICIADOS (TEMPO)
+                                </button>
+                            </div>
+
+                            <div className="bg-white retro-border p-2 md:p-4">
+                                <div className="bg-yellow-300 border-2 border-black p-2 mb-4 text-center font-pixel text-[10px]">
+                                    ATUALIZADO A CADA 1 MINUTO
+                                </div>
+                                <table className="w-full text-left bg-gray-100 border-2 border-black">
+                                    <thead className="bg-black text-white font-pixel text-[9px] md:text-[10px]">
+                                        <tr>
+                                            <th className="px-2 py-3 text-center">#</th>
+                                            <th className="px-2 py-3">NOME</th>
+                                            <th className="px-2 py-3 text-right">
+                                                {rankingMode === 'MONEY' ? 'LUCRO TOTAL' : 'TEMPO ONLINE'}
+                                            </th>
+                                        </tr>
+                                    </thead>
+                                    <tbody className="divide-y-2 divide-black font-mono text-xs md:text-sm">
+                                        {leaderboard.slice(0, 50).map((player, index) => {
+                                            const isMe = player.username === username;
+                                            
+                                            // Row Background Logic
+                                            let rowClass = isMe ? "bg-indigo-100" : "bg-white";
+                                            if(index === 0) rowClass = "bg-yellow-200"; 
+                                            if(index === 1) rowClass = "bg-gray-200";
+                                            if(index === 2) rowClass = "bg-orange-200";
+
+                                            // Name Color Logic based on Mode
+                                            let nameColor = "text-black";
+                                            if (rankingMode === 'MONEY') nameColor = "text-green-600 drop-shadow-sm";
+                                            if (rankingMode === 'TIME') nameColor = "text-blue-600 drop-shadow-sm";
+
+                                            return (
+                                                <tr key={index} className={`${rowClass} border-b border-black/20`}>
+                                                    <td className="px-2 py-2 text-center font-bold text-gray-600 font-pixel">{index + 1}</td>
+                                                    <td className="px-2 py-2">
+                                                        <div className={`font-bold uppercase text-[10px] md:text-xs ${nameColor} font-pixel`}>{player.username}</div>
+                                                        <div className="text-[9px] text-gray-600 font-bold">{player.title}</div>
+                                                    </td>
+                                                    <td className="px-2 py-2 text-right font-bold text-black font-mono">
+                                                        {rankingMode === 'MONEY' ? `$${formatMoney(player.lifetimeEarnings)}` : formatTime(player.playTime || 0)}
+                                                    </td>
+                                                </tr>
+                                            );
+                                        })}
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* --- ADMIN --- */}
+                    {activeTab === Tab.ADMIN && isAdmin && (
+                         <div className="space-y-4">
+                            <div className="bg-black text-green-400 p-4 retro-border">
+                                <h2 className="font-pixel text-sm mb-4">ADMIN CONSOLE</h2>
+                                <div className="grid grid-cols-2 gap-2">
+                                    <button onClick={() => adminAddMoney(100000000)} className="border border-green-500 p-2 text-xs hover:bg-green-900">+ $100M</button>
+                                    <button onClick={() => adminAddCredits(100)} className="border border-cyan-500 p-2 text-xs hover:bg-cyan-900 text-cyan-400">+ 100 CREDITS</button>
+                                </div>
+                            </div>
+                         </div>
+                    )}
+                    
+                    {/* Render Upgrades and Profile tabs */}
+                    {activeTab === Tab.UPGRADES && (
+                        <div className="space-y-4">
+                            {UPGRADES.map(upgrade => {
+                            const bought = gameState.purchasedUpgrades[upgrade.id];
+                            const canAfford = gameState.money >= upgrade.cost;
+                            if (upgrade.triggerId && (gameState.productLevels[upgrade.triggerId] || 0) === 0) return null;
+                            if (bought) return null;
+                            return (
+                                <div key={upgrade.id} className="bg-white p-4 retro-border flex justify-between items-center">
+                                <div className="flex gap-3 items-center">
+                                    <div className="bg-purple-200 border-2 border-black text-purple-800 p-2 hidden md:block"><Zap size={20} /></div>
+                                    <div>
+                                    <h3 className="font-pixel text-xs text-black">{upgrade.name}</h3>
+                                    <p className="text-sm text-gray-600 font-mono">{upgrade.description}</p>
+                                    </div>
+                                </div>
+                                <button onClick={() => buyUpgrade(upgrade)} disabled={!canAfford} className={`px-3 py-2 border-2 border-black font-pixel text-xs retro-btn ${canAfford ? 'bg-purple-600 text-white hover:bg-purple-500' : 'bg-gray-300 text-gray-500'}`}>${formatMoney(upgrade.cost)}</button>
+                                </div>
+                            );
+                            })}
+                        </div>
+                    )}
+
+                    {activeTab === Tab.PROFILE && (
+                        <div className="space-y-6 text-center">
+                            <div className="bg-white p-6 retro-border relative">
+                            <h2 className="text-xl font-pixel text-black">{currentTitle}</h2>
+                            <p className="text-gray-500 font-mono uppercase">JOGADOR: {username}</p>
+                            <div className="border-4 border-black bg-gray-100 p-4 mt-6">
+                                <div className="flex justify-between items-center mb-2 border-b-2 border-gray-400 pb-2">
+                                    <span className="font-pixel text-xs text-gray-500">TEMPO ONLINE</span>
+                                    <span className="font-pixel text-sm text-black">{formatTime(gameState.playTime || 0)}</span>
+                                </div>
+                                <div className="flex justify-between items-center">
+                                    <span className="font-pixel text-xs text-gray-500">CREDITOS</span>
+                                    <span className="font-pixel text-sm text-cyan-600">{gameState.credits}</span>
+                                </div>
+                            </div>
+                            </div>
+
+                            <div className="bg-indigo-900 p-6 retro-border text-white border-4 border-black shadow-xl">
+                                <h3 className="text-sm font-pixel mb-4 flex items-center justify-center gap-2 text-yellow-300"><ArrowUpCircle /> PRÓXIMO CARGO</h3>
+                                {nextTitleInfo ? (
+                                    <>
+                                        <p className="text-indigo-200 text-sm font-mono mb-2">ALCANCE: <span className="text-white font-bold">{nextTitleInfo.name}</span></p>
+                                        <p className="text-indigo-200 text-xs font-mono mb-4">CUSTO ACUMULADO: ${formatMoney(nextTitleInfo.cost)}</p>
+                                        {gameState.lifetimeEarnings >= nextTitleInfo.cost ? (
+                                            <button onClick={handlePrestigeClick} className="w-full bg-yellow-400 text-black border-2 border-white font-pixel py-3 hover:bg-yellow-300 retro-btn animate-pulse text-xs">PROMOÇÃO DISPONIVEL!</button>
+                                        ) : (
+                                            <div className="bg-black border-2 border-gray-600 p-3 font-mono text-sm">
+                                            <span className="text-red-500">BLOQUEADO</span><br/>
+                                            <div className="w-full bg-gray-800 h-4 border border-gray-600 mt-2">
+                                                <div className="bg-green-500 h-full" style={{ width: `${Math.min(100, (gameState.lifetimeEarnings / nextTitleInfo.cost) * 100)}%` }}></div>
+                                            </div>
+                                            <span className="text-[10px] text-gray-400 mt-1 block">${formatMoney(gameState.lifetimeEarnings)} / ${formatMoney(nextTitleInfo.cost)}</span>
+                                            </div>
+                                        )}
+                                    </>
+                                ) : (
+                                    <p className="text-yellow-400 font-pixel">VOCÊ É UMA LENDA MÁXIMA!</p>
+                                )}
+                            </div>
+                        </div>
+                    )}
+
                 </div>
-            )}
-          </div>
-        </section>
-      </main>
+            </main>
+        </div>
+
+        {/* Footer Stripe */}
+        <div className="h-4 flex border-t-4 border-black shrink-0">
+            <div className="flex-1 bg-red-500 border-r-2 border-black"></div>
+            <div className="flex-1 bg-yellow-400 border-r-2 border-black"></div>
+            <div className="flex-1 bg-green-500 border-r-2 border-black"></div>
+            <div className="flex-1 bg-blue-500"></div>
+        </div>
+      </div>
     </div>
   );
 }
